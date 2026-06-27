@@ -25,6 +25,14 @@ on its own as you push the gain harder. So modest moves stay broad and musical �
 good for shaping the overall tone of a track — while bigger moves get focused
 enough to chase a specific resonance, all without a separate Q control to manage.
 
+That self-tightening is gentle, and the Q never strays far: across the whole gain
+travel it stays between roughly **0.4 and 0.6**. The broadest setting is a small
+move — Q ≈ 0.4, a couple of octaves wide — and pushing all the way to maximum boost
+only narrows it to about 0.58 (a full cut tightens a touch less). Even at its
+narrowest it stays wider than a textbook bell (Q ≈ 1) or a Butterworth (Q ≈ 0.71),
+and the value depends only on gain, not on where you set the frequency. So the band
+always reads as broad and musical — it focuses, but it never becomes a surgical notch.
+
 - **Low** and **High** can be **bell** or **shelf** (see below).
 - **Lo-Mid** and **Hi-Mid** are always **bell** — the midrange workhorses.
 
