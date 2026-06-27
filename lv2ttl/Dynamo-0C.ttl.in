@@ -1,0 +1,151 @@
+@prefix doap: <http://usefulinc.com/ns/doap#> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+@prefix lv2:  <http://lv2plug.in/ns/lv2core#> .
+@prefix pg:   <http://lv2plug.in/ns/ext/port-groups#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ui:   <http://lv2plug.in/ns/extensions/ui#> .
+@prefix units:<http://lv2plug.in/ns/extensions/units#> .
+@prefix zc:   <https://github.com/NiLace/Dynamo-0C#> .
+
+<https://github.com/NiLace/Dynamo-0C#stereoIn>
+	a pg:Group , pg:StereoGroup ; lv2:symbol "in" ; rdfs:label "Input" .
+<https://github.com/NiLace/Dynamo-0C#stereoOut>
+	a pg:Group , pg:StereoGroup ; lv2:symbol "out" ; rdfs:label "Output" .
+
+<https://github.com/NiLace/Dynamo-0C>
+	a lv2:Plugin , lv2:EQPlugin ;
+	doap:name "Dynamo 0C EQ" ;
+	doap:license <http://usefulinc.com/doap/licenses/gpl> ;
+	doap:homepage <https://github.com/NiLace> ;
+	doap:maintainer [
+		a foaf:Organization ;
+		foaf:name "NL Sounds" ;
+		foaf:homepage <https://github.com/NiLace> ;
+		foaf:mbox <mailto:nilace@nylarea.com>
+	] ;
+	lv2:minorVersion 2 ; lv2:microVersion 0 ;
+	@ZC_UI@
+	lv2:optionalFeature lv2:hardRTCapable ;
+
+	lv2:port [
+		a lv2:InputPort , lv2:AudioPort ; lv2:index 0 ;
+		lv2:symbol "in_l" ; lv2:name "In L" ;
+		pg:group <https://github.com/NiLace/Dynamo-0C#stereoIn> ; lv2:designation pg:left
+	] , [
+		a lv2:InputPort , lv2:AudioPort ; lv2:index 1 ;
+		lv2:symbol "in_r" ; lv2:name "In R" ;
+		pg:group <https://github.com/NiLace/Dynamo-0C#stereoIn> ; lv2:designation pg:right
+	] , [
+		a lv2:OutputPort , lv2:AudioPort ; lv2:index 2 ;
+		lv2:symbol "out_l" ; lv2:name "Out L" ;
+		pg:group <https://github.com/NiLace/Dynamo-0C#stereoOut> ; lv2:designation pg:left
+	] , [
+		a lv2:OutputPort , lv2:AudioPort ; lv2:index 3 ;
+		lv2:symbol "out_r" ; lv2:name "Out R" ;
+		pg:group <https://github.com/NiLace/Dynamo-0C#stereoOut> ; lv2:designation pg:right
+	] , [
+		a lv2:InputPort , lv2:ControlPort ; lv2:index 4 ;
+		lv2:symbol "power" ; lv2:name "Power" ;
+		lv2:default 1 ; lv2:minimum 0 ; lv2:maximum 1 ;
+		lv2:portProperty lv2:toggled , lv2:integer
+	] , [
+		a lv2:InputPort , lv2:ControlPort ; lv2:index 5 ;
+		lv2:symbol "eq_on" ; lv2:name "EQ Engage" ;
+		lv2:default 1 ; lv2:minimum 0 ; lv2:maximum 1 ;
+		lv2:portProperty lv2:toggled , lv2:integer
+	] , [
+		a lv2:InputPort , lv2:ControlPort ; lv2:index 6 ;
+		lv2:symbol "hi_freq" ; lv2:name "High Freq" ;
+		lv2:default 0.5 ; lv2:minimum 0.0 ; lv2:maximum 1.0
+	] , [
+		a lv2:InputPort , lv2:ControlPort ; lv2:index 7 ;
+		lv2:symbol "hi_gain" ; lv2:name "High Gain" ;
+		lv2:default 0.5 ; lv2:minimum 0.0 ; lv2:maximum 1.0
+	] , [
+		a lv2:InputPort , lv2:ControlPort ; lv2:index 8 ;
+		lv2:symbol "hf_shelf" ; lv2:name "High Bell/Shelf" ;
+		lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 1 ;
+		lv2:portProperty lv2:toggled , lv2:integer ;
+		lv2:scalePoint [ rdfs:label "Bell" ; rdf:value 0 ] , [ rdfs:label "Shelf" ; rdf:value 1 ]
+	] , [
+		a lv2:InputPort , lv2:ControlPort ; lv2:index 9 ;
+		lv2:symbol "himid_freq" ; lv2:name "Hi-Mid Freq" ;
+		lv2:default 0.5 ; lv2:minimum 0.0 ; lv2:maximum 1.0
+	] , [
+		a lv2:InputPort , lv2:ControlPort ; lv2:index 10 ;
+		lv2:symbol "himid_gain" ; lv2:name "Hi-Mid Gain" ;
+		lv2:default 0.5 ; lv2:minimum 0.0 ; lv2:maximum 1.0
+	] , [
+		a lv2:InputPort , lv2:ControlPort ; lv2:index 11 ;
+		lv2:symbol "lomid_freq" ; lv2:name "Lo-Mid Freq" ;
+		lv2:default 0.5 ; lv2:minimum 0.0 ; lv2:maximum 1.0
+	] , [
+		a lv2:InputPort , lv2:ControlPort ; lv2:index 12 ;
+		lv2:symbol "lomid_gain" ; lv2:name "Lo-Mid Gain" ;
+		lv2:default 0.5 ; lv2:minimum 0.0 ; lv2:maximum 1.0
+	] , [
+		a lv2:InputPort , lv2:ControlPort ; lv2:index 13 ;
+		lv2:symbol "lo_freq" ; lv2:name "Low Freq" ;
+		lv2:default 0.5 ; lv2:minimum 0.0 ; lv2:maximum 1.0
+	] , [
+		a lv2:InputPort , lv2:ControlPort ; lv2:index 14 ;
+		lv2:symbol "lo_gain" ; lv2:name "Low Gain" ;
+		lv2:default 0.5 ; lv2:minimum 0.0 ; lv2:maximum 1.0
+	] , [
+		a lv2:InputPort , lv2:ControlPort ; lv2:index 15 ;
+		lv2:symbol "lf_shelf" ; lv2:name "Low Bell/Shelf" ;
+		lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 1 ;
+		lv2:portProperty lv2:toggled , lv2:integer ;
+		lv2:scalePoint [ rdfs:label "Bell" ; rdf:value 0 ] , [ rdfs:label "Shelf" ; rdf:value 1 ]
+	] , [
+		a lv2:InputPort , lv2:ControlPort ; lv2:index 16 ;
+		lv2:symbol "hp_freq" ; lv2:name "HP Freq" ;
+		lv2:default 0.0 ; lv2:minimum 0.0 ; lv2:maximum 1.0
+	] , [
+		a lv2:InputPort , lv2:ControlPort ; lv2:index 17 ;
+		lv2:symbol "hp_on" ; lv2:name "HP Enable" ;
+		lv2:default 1 ; lv2:minimum 0 ; lv2:maximum 1 ;
+		lv2:portProperty lv2:toggled , lv2:integer
+	] , [
+		a lv2:InputPort , lv2:ControlPort ; lv2:index 18 ;
+		lv2:symbol "lp_freq" ; lv2:name "LP Freq" ;
+		lv2:default 1.0 ; lv2:minimum 0.0 ; lv2:maximum 1.0
+	] , [
+		a lv2:InputPort , lv2:ControlPort ; lv2:index 19 ;
+		lv2:symbol "lp_on" ; lv2:name "LP Enable" ;
+		lv2:default 1 ; lv2:minimum 0 ; lv2:maximum 1 ;
+		lv2:portProperty lv2:toggled , lv2:integer
+	] , [
+		a lv2:InputPort , lv2:ControlPort ; lv2:index 20 ;
+		lv2:symbol "lp_mode" ; lv2:name "LP Mode" ;
+		lv2:default 1 ; lv2:minimum 0 ; lv2:maximum 1 ;
+		lv2:portProperty lv2:toggled , lv2:integer ;
+		lv2:scalePoint [ rdfs:label "Clean" ; rdf:value 0 ] , [ rdfs:label "Resonant" ; rdf:value 1 ]
+	] , [
+		a lv2:InputPort , lv2:ControlPort ; lv2:index 21 ;
+		lv2:symbol "oversample" ; lv2:name "Oversampling" ;
+		lv2:default 3 ; lv2:minimum 0 ; lv2:maximum 3 ;
+		lv2:portProperty lv2:integer , lv2:enumeration ;
+		lv2:scalePoint [ rdfs:label "1x" ; rdf:value 0 ] ,
+		               [ rdfs:label "2x" ; rdf:value 1 ] ,
+		               [ rdfs:label "4x" ; rdf:value 2 ] ,
+		               [ rdfs:label "Auto" ; rdf:value 3 ]
+	] , [
+		a lv2:OutputPort , lv2:ControlPort ; lv2:index 22 ;
+		lv2:symbol "latency" ; lv2:name "Latency" ;
+		lv2:minimum 0 ; lv2:maximum 256 ;
+		lv2:designation lv2:latency ;
+		lv2:portProperty lv2:reportsLatency , lv2:integer
+	] , [
+		a lv2:InputPort , lv2:ControlPort ; lv2:index 23 ;
+		lv2:symbol "hp_bump" ; lv2:name "HP Bump" ;
+		lv2:default 1 ; lv2:minimum 0 ; lv2:maximum 1 ;
+		lv2:portProperty lv2:toggled , lv2:integer ;
+		lv2:scalePoint [ rdfs:label "Flat" ; rdf:value 0 ] , [ rdfs:label "Bump" ; rdf:value 1 ]
+	] , [
+		a lv2:InputPort , lv2:ControlPort ; lv2:index 24 ;
+		lv2:symbol "drive" ; lv2:name "Drive" ;
+		lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 1 ;
+		rdfs:comment "Channel drive (console-style input stage). 0 = bypass (auto-engages when moved); 0.5 = nominal intensity."
+	] .

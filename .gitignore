@@ -1,0 +1,13 @@
+# build output
+/build/
+
+# object / binary cruft
+*.o
+*.d
+*.so
+*.a
+
+# editor / OS
+*~
+*.swp
+.DS_Store

@@ -1,0 +1,6 @@
+
+<https://github.com/NiLace/Dynamo-0C#ui>
+	a ui:X11UI ;
+	lv2:requiredFeature ui:parent ;
+	lv2:optionalFeature ui:resize ;
+	lv2:extensionData ui:idleInterface , ui:resize .
