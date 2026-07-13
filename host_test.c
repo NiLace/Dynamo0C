@@ -36,7 +36,7 @@ int main(int argc, char **argv) {
   for (int i = 0; i < ZC_N_PORTS; i++) ports[i] = 0.0f;
   ports[P_POWER] = 1; ports[P_EQ_ON] = 1; ports[P_HI_FREQ]=ports[P_HI_GAIN]=0.5f;
   ports[P_HIMID_FREQ]=ports[P_HIMID_GAIN]=0.5f; ports[P_LOMID_FREQ]=ports[P_LOMID_GAIN]=0.5f;
-  ports[P_LO_FREQ]=ports[P_LO_GAIN]=0.5f; ports[P_LP_FREQ]=1.0f; ports[P_OVERSAMPLE]=2;
+  ports[P_LO_FREQ]=ports[P_LO_GAIN]=0.5f; ports[P_LP_FREQ]=1.0f;
   ports[P_HP_ON]=1; ports[P_LP_ON]=1;   /* enables: host default = 1 */
   for (int i = 0; i < ZC_N_PORTS; i++) d->connect_port(inst, i, &ports[i]);
   d->connect_port(inst, P_IN_L, inL); d->connect_port(inst, P_IN_R, inR);
@@ -91,8 +91,16 @@ int main(int argc, char **argv) {
   fail |= (g_lp > -6);
   ports[P_LP_FREQ]=1.0f;   /* CW end = off */
 
-  /* 6) reported latency (OS=4) */
-  printf("[latency OS4] = %.2f samples\n", ports[P_LATENCY]);
+  /* 6) reported latency: 0 with drive off (EQ is 1x), >0 with the drive oversampled */
+  sine(inL, 1000); memcpy(inR, inL, sizeof inL);
+  ports[P_DRIVE]=0.0f;   ports[P_DRIVE_OS]=0; d->run(inst, N);
+  float lat_off = ports[P_LATENCY];
+  ports[P_DRIVE]=0.75f;  ports[P_DRIVE_OS]=2; d->run(inst, N);   /* 4x */
+  float lat_os = ports[P_LATENCY];
+  printf("[latency] drive off = %.2f | drive 4x = %.2f samples  %s\n", lat_off, lat_os,
+         (lat_off==0.0f && lat_os>0.0f) ? "OK" : "FAIL");
+  fail |= !(lat_off==0.0f && lat_os>0.0f);
+  ports[P_DRIVE]=0.0f; ports[P_DRIVE_OS]=0;
 
   /* 7) stability: finite output */
   int nan=0; for(int i=0;i<N;i++) if(!isfinite(outL[i])) nan++;

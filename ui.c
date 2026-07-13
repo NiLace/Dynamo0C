@@ -39,6 +39,10 @@ typedef struct {
   int    last_knob; double last_press;
   int    needs_redraw;
 
+  int    show_settings;    /* settings overlay open (opened by clicking the brand) */
+  int    set_hover_seg;    /* hovered drive-oversampling segment (-1 none) */
+  int    set_hover_close;  /* hovering the close-X */
+
   ZcHit  hits[2]; int nhits;   /* bell/shelf icon hit-boxes, per instance, filled at draw time */
 
   int    win_w, win_h;     /* current window size */
@@ -83,6 +87,24 @@ static int switch_at(double x, double y) {
 /* ---------- events ---------- */
 static void on_press(ZcUI *ui, double x, double y) {
   double now = puglGetTime(ui->world);
+
+  /* settings overlay open: it consumes ALL clicks (select OS / close), never falls through */
+  if (ui->show_settings) {
+    double dxc = x - SET_CLOSE_CX, dyc = y - SET_CLOSE_CY;
+    if (dxc*dxc + dyc*dyc <= SET_CLOSE_R*SET_CLOSE_R) { ui->show_settings = 0; redraw(ui); return; }
+    for (int i = 0; i < SET_NOPT; i++) {
+      double sx, sy, sw, sh; set_seg_rect(i, &sx, &sy, &sw, &sh);
+      if (x >= sx && x <= sx+sw && y >= sy && y <= sy+sh) {
+        write_port(ui, P_DRIVE_OS, (float)i); redraw(ui); return;   /* stay open to try others */
+      }
+    }
+    if (!set_in_card(x, y)) { ui->show_settings = 0; redraw(ui); }    /* click outside -> close */
+    return;
+  }
+  /* clicking the brand "DYNAMO 0C" opens the settings overlay */
+  if (brand_hit(x, y)) { ui->show_settings = 1; ui->set_hover_seg = -1; ui->set_hover_close = 0;
+                         ui->last_knob = -1; redraw(ui); return; }
+
   int k = knob_at(x, y);
   if (k >= 0) {
     if (ui->last_knob == k && (now - ui->last_press) < DCLICK_S) {   /* double-click = reset */
@@ -128,6 +150,20 @@ static void on_motion(ZcUI *ui, double y, unsigned mods) {
 }
 static void on_release(ZcUI *ui) { ui->drag_knob = -1; }
 
+/* hover feedback while the settings overlay is open (highlight segment / close-X) */
+static void on_hover_settings(ZcUI *ui, double x, double y) {
+  int seg = -1;
+  for (int i = 0; i < SET_NOPT; i++) {
+    double sx, sy, sw, sh; set_seg_rect(i, &sx, &sy, &sw, &sh);
+    if (x >= sx && x <= sx+sw && y >= sy && y <= sy+sh) { seg = i; break; }
+  }
+  double dxc = x - SET_CLOSE_CX, dyc = y - SET_CLOSE_CY;
+  int close = (dxc*dxc + dyc*dyc <= SET_CLOSE_R*SET_CLOSE_R);
+  if (seg != ui->set_hover_seg || close != ui->set_hover_close) {
+    ui->set_hover_seg = seg; ui->set_hover_close = close; redraw(ui);
+  }
+}
+
 static void on_expose(ZcUI *ui, PuglView *view) {
   cairo_t *cr = (cairo_t*)puglGetContext(view);
   if (!cr) return;
@@ -138,6 +174,8 @@ static void on_expose(ZcUI *ui, PuglView *view) {
   cairo_translate(cr, ui->ox, ui->oy);
   cairo_scale(cr, ui->scale, ui->scale);
   zc_draw_panel(cr, ui->v, ui->show_knob, ui->hits, &ui->nhits);
+  if (ui->show_settings)
+    zc_draw_settings(cr, ui->v, ui->set_hover_seg, ui->set_hover_close);
   cairo_restore(cr);
 }
 
@@ -152,7 +190,10 @@ static PuglStatus on_event(PuglView *view, const PuglEvent *e) {
     case PUGL_EXPOSE:         on_expose(ui, view); break;
     case PUGL_BUTTON_PRESS:   on_press(ui, (e->button.x - ui->ox)/s, (e->button.y - ui->oy)/s); break;
     case PUGL_BUTTON_RELEASE: on_release(ui); break;
-    case PUGL_MOTION:         on_motion(ui, (e->motion.y - ui->oy)/s, e->motion.state); break;
+    case PUGL_MOTION:
+      if (ui->show_settings) on_hover_settings(ui, (e->motion.x - ui->ox)/s, (e->motion.y - ui->oy)/s);
+      else on_motion(ui, (e->motion.y - ui->oy)/s, e->motion.state);
+      break;
     default: break;
   }
   return PUGL_SUCCESS;
@@ -176,10 +217,10 @@ instantiate(const LV2UI_Descriptor *d, const char *uri, const char *bundle,
     snprintf(fontdir, sizeof fontdir, "%s%sfonts", bundle, slash ? "" : "/");
     ui->fonts_loaded = zc_fonts_load(fontdir);
   }
-  ui->drag_knob = -1; ui->show_knob = -1; ui->last_knob = -1;
+  ui->drag_knob = -1; ui->show_knob = -1; ui->last_knob = -1; ui->set_hover_seg = -1;
   /* default values (until the host sends port_event) */
   for (int i = 0; i < ZC_N_PORTS; i++) ui->v[i] = 0.0f;
-  ui->v[P_POWER] = 1; ui->v[P_EQ_ON] = 1; ui->v[P_HF_SHELF] = 1; ui->v[P_OVERSAMPLE] = 3; /* 3 = Auto */
+  ui->v[P_POWER] = 1; ui->v[P_EQ_ON] = 1; ui->v[P_HF_SHELF] = 1;
   ui->v[P_HP_BUMP] = 1;
   for (int i = 0; i < ZC_NKNOB; i++) ui->v[KNOBS[i].port] = (float)KNOBS[i].def;
 
