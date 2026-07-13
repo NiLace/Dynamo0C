@@ -33,8 +33,10 @@
 /* number of elements in a static array (so table lengths aren't hard-coded by hand) */
 #define ZC_ARRLEN(a) ((int)(sizeof(a) / sizeof((a)[0])))
 
-/* high-pass Q per the BUMP button: 0.707 = flat Butterworth (no peak); ZC_HP_Q (measured,
- * ~1.0) = the slight resonance of the original circuit that boosts ~+1.5 dB just above the cutoff. */
+/* high-pass Q per the BUMP button: 0.707 = flat Butterworth (no peak); ZC_HP_Q (~1.0) is a
+ * deliberate VOICING choice — a gentle resonant lift (~+1.5 dB) just above the corner, in the
+ * spirit of a console filter knee. It is hand-set, NOT part of the modelled hardware (whose
+ * filter corners are flat); same for ZC_LP_Q_RESONANT on the low-pass. */
 #define ZC_HP_Q_FLAT 0.70710678118654752
 
 /* ----------------------------------------------------------------- interpolation */
