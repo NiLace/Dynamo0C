@@ -29,6 +29,13 @@ the top the way a naïve digital EQ does. The whole thing is voiced to feel like
 turning knobs on a desk rather than dialling numbers into a plugin: smooth,
 forgiving, hard to make sound harsh.
 
+<p align="center"><img src="assets/images/eq_response.png" alt="Dynamo 0C frequency response — plugin vs analogue model, BUMP off and on" width="720"></p>
+
+The curve above is a full EQ pass with the high-pass and low-pass filters engaged.
+The plugin (solid) sits right on top of the analogue prototype it's modelled on
+(dashed) — they agree to well under 0.3&nbsp;dB across the whole spectrum — and the
+**BUMP** switch adds the resonant knee you can see at the two filter corners.
+
 ### The four bands
 
 **Low · Lo-Mid · Hi-Mid · High**, each with frequency and gain. They're
