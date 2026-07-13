@@ -3,6 +3,7 @@
  * WHAT IT DOES
  *   Processes audio through a chain of IIR sections: high-pass filter (HP),
  *   four EQ bands (the two outer ones switch bell<->shelf) and low-pass filter (LP).
+ *   An optional non-linear DRIVE (input stage) sits before the chain and has its own oversampling.
  *
  * HOW IT WORKS (summary for the first-time reader)
  *   1. Each band/filter is first defined as an ANALOG transfer function
@@ -10,10 +11,13 @@
  *      tabulated in coeffs.h (generated file; see its header); HP/LP are standard
  *      Sallen-Key biquads. The user controls (norm 0..1) are mapped to the filter
  *      parameters via interpolation tables ("tapers"), also in coeffs.h.
- *   2. That H(s) is converted to a DIGITAL filter with the BILINEAR transform, evaluated at a
- *      frequency OS*fs (oversampling) so the response is not warped near Nyquist.
- *   3. The chain runs sample by sample (Direct Form II transposed), with upsampling and
- *      downsampling by a half-band FIR when OS>1.
+ *   2. That H(s) is converted to a DIGITAL filter with an ANALOG-MATCHED design (matched.h):
+ *      matched-Z de polos+ceros + una corrección FIR que casa la magnitud analógica cerca de
+ *      Nyquist SIN cramping. Fiel al analógico a ~0.3 dB en todo el recorrido, siempre estable
+ *      (los polos vienen del denominador matched-Z de un analógico estable). El EQ es LINEAL, así
+ *      que corre a la fs base: un biquad por banda, sin oversampling y con latencia cero.
+ *   3. The chain runs sample by sample (Direct Form II transposed); el numerador puede ser de grado
+ *      hasta 7 (nz<=2 + corrección FIR grado ZC_MZ_CORR=5), el denominador hasta 3.
  *
  *   The coefficients are only recomputed when a control changes (not per sample) and can be
  *   refreshed "live" without resetting the state, avoiding clicks when moving the controls.
@@ -24,6 +28,7 @@
 #include <math.h>
 #include <string.h>
 #include "coeffs.h"
+#include "matched.h"   /* diseñador analog-matched (matched-Z + corrección FIR), reemplaza bilineal+OS del EQ */
 
 /* number of elements in a static array (so table lengths aren't hard-coded by hand) */
 #define ZC_ARRLEN(a) ((int)(sizeof(a) / sizeof((a)[0])))
@@ -52,63 +57,34 @@ static inline double zc_interp(double xq, const float *xs, const float *ys, int 
   return ys[i] * (1.0 - fr) + ys[i + 1] * fr;
 }
 
-/* ----------------------------------------------------------------- bilinear transform */
-
-/* binomial coefficient C(n,k), for the expansion of the bilinear substitution */
-static inline double zc_comb(int n, int k) {
-  if (k < 0 || k > n) return 0.0;
-  double r = 1.0;
-  for (int i = 0; i < k; i++) r = r * (n - i) / (i + 1);
-  return r;
-}
-
-/* Bilinear transform: converts an ANALOG filter H(s)=B(s)/A(s) into a DIGITAL one at the
- * sample rate fs, substituting s = 2*fs*(1-z^-1)/(1+z^-1) and expanding.
- *   - b/a: coefficients in DESCENDING powers of s (b[0] = highest-degree term).
- *   - bz/az: output, digital coefficients in descending powers of z, normalized az[0]=1.
- *   - nb/na: lengths of b/a. Returns M = order of the digital filter (= max(deg B, deg A)). */
-static inline int zc_bilinear(const double *b, int nb, const double *a, int na,
-                                 double fs, double *bz, double *az) {
-  int N = nb - 1, D = na - 1;
-  int M = (D > N) ? D : N;
-  double two_fs[4]; two_fs[0] = 1.0;
-  for (int i = 1; i <= M; i++) two_fs[i] = two_fs[i - 1] * (2.0 * fs);
-  for (int j = 0; j <= M; j++) {
-    double vb = 0.0, va = 0.0;
-    for (int i = 0; i <= M; i++) {
-      for (int k = 0; k <= i; k++) {
-        int l = j - k;
-        if (l < 0 || l > M - i) continue;
-        double w = zc_comb(i, k) * zc_comb(M - i, l) * two_fs[i] * ((k & 1) ? -1.0 : 1.0);
-        if (i <= N) vb += w * b[N - i];
-        if (i <= D) va += w * a[D - i];
-      }
-    }
-    bz[j] = vb; az[j] = va;
-  }
-  double a0 = az[0];
-  for (int j = 0; j <= M; j++) { bz[j] /= a0; az[j] /= a0; }
-  return M;
-}
-
 /* ----------------------------------------------------------------- sections */
 
 typedef enum { ZC_BELL, ZC_HISHELF, ZC_LOSHELF, ZC_HP, ZC_LP } ZcKind;
 
-/* One section realized as a digital IIR of order <=3 (Direct Form II transposed). */
+/* One section: digital IIR con numerador de grado <=7 (nz<=2 + corrección FIR grado ZC_MZ_CORR=5) y
+ * denominador de grado <=3, Direct Form II transposed. Los polos vienen solo del denominador
+ * (matched-Z de un analógico estable) -> siempre estable. b[8] alberga hasta grado 7. */
 typedef struct {
-  int    order;            /* 1..3 */
-  double b[4], a[4];       /* digital coeffs (a[0]=1) */
-  double z[3];             /* state */
+  int    nb;               /* grado del numerador (0..7) */
+  int    na;               /* grado del denominador (0..3) */
+  double b[8], a[4];       /* coeffs digitales ASC en z^-1 (a[0]=1) */
+  double z[7];             /* estado, tamaño max(nb,na) */
 } ZcSection;
 
-static inline void zc_section_reset(ZcSection *s) { s->z[0] = s->z[1] = s->z[2] = 0.0; }
+static inline void zc_section_reset(ZcSection *s) { for (int i = 0; i < 7; i++) s->z[i] = 0.0; }
 
 static inline double zc_section_tick(ZcSection *s, double x) {
   double y = s->b[0] * x + s->z[0];
-  for (int i = 0; i < s->order - 1; i++)
-    s->z[i] = s->b[i + 1] * x - s->a[i + 1] * y + s->z[i + 1];
-  s->z[s->order - 1] = s->b[s->order] * x - s->a[s->order] * y;
+  int N = (s->nb > s->na) ? s->nb : s->na;
+  for (int i = 0; i < N - 1; i++) {
+    double bi = (i + 1 <= s->nb) ? s->b[i + 1] : 0.0;
+    double ai = (i + 1 <= s->na) ? s->a[i + 1] : 0.0;
+    s->z[i] = bi * x - ai * y + s->z[i + 1];
+  }
+  { int i = N - 1;
+    double bi = (i + 1 <= s->nb) ? s->b[i + 1] : 0.0;
+    double ai = (i + 1 <= s->na) ? s->a[i + 1] : 0.0;
+    s->z[i] = bi * x - ai * y; }
   return y;
 }
 
@@ -143,28 +119,30 @@ static inline void zc_lp_analog(double fc, double Q, double *b, int *nb, double 
   a[0] = 1.0; a[1] = w0 / Q; a[2] = w0 * w0; *nb = 3; *na = 3;
 }
 
-/* Builds a section: analog -> bilinear at fs_os -> fills ZcSection. */
-/* NOTE: these builders only (re)compute b/a/order; they do NOT touch the z[] state, so they serve to
+/* Builds a section: analog -> matched-Z + corrección FIR (a fs) -> fills ZcSection. */
+/* NOTE: these builders only (re)compute b/a/nb/na; they do NOT touch the z[] state, so they serve to
  * update coefficients live (when moving a control) without clicks. The state reset is done by
  * zc_chain_build when the STRUCTURE of the chain changes. */
 static inline void zc_section_build_bellshelf(ZcSection *sec, ZcKind kind,
         const float *ftap, const float *wtap, const double *cap,
-        double nf, double ng, double fs_os) {
+        double nf, double ng, double fs) {
   double b[4], a[4]; int nb, na;
   zc_bellshelf_analog(kind, ftap, wtap, cap, nf, ng, b, &nb, a, &na);
-  sec->order = zc_bilinear(b, nb, a, na, fs_os, sec->b, sec->a);
+  zc_matched_design(b, nb, a, na, fs, sec->b, &sec->nb, sec->a, &sec->na);
 }
 static inline void zc_section_build_filter(ZcSection *sec, ZcKind kind,
-        double fc, double Q, double fs_os) {
+        double fc, double Q, double fs) {
   double b[4], a[4]; int nb, na;
   if (kind == ZC_HP) zc_hp_analog(fc, Q, b, &nb, a, &na);
   else                  zc_lp_analog(fc, Q, b, &nb, a, &na);
-  sec->order = zc_bilinear(b, nb, a, na, fs_os, sec->b, sec->a);
+  zc_matched_design(b, nb, a, na, fs, sec->b, &sec->nb, sec->a, &sec->na);
 }
 
-/* ----------------------------------------------------------------- oversampling (windowed-sinc 2x FIR, cascade) */
+/* ----------------------------------------------------------------- drive oversampling FIR (windowed-sinc 2x, cascade)
+ * Used ONLY by the DRIVE (below): its non-linear shaper aliases, so it is run at 2x/4x and this
+ * half-band FIR does the up/down sampling. The EQ is analog-matched and never oversamples. */
 /* 16-tap windowed-sinc low-pass kernel (sinc with Blackman window): cutoff at the original
- * Nyquist, DC gain = 1. Used to upsample and downsample in the oversampling. */
+ * Nyquist, DC gain = 1. Used to upsample and downsample the drive. */
 #define ZC_OS_TAPS 16
 #define ZC_OS_MASK (ZC_OS_TAPS - 1)        /* TAPS is a power of 2 -> circular indexing via mask */
 static const double zc_os_kernel[ZC_OS_TAPS] = {
@@ -221,64 +199,113 @@ static inline double zc_drive_tick(ZcDrive *d, double x) {
   return y;
 }
 
-/* ----------------------------------------------------------------- full chain */
+/* ---- drive with OPTIONAL oversampling ---------------------------------------------------------
+ * The drive shaper is NON-LINEAR and MEMORYLESS -> it generates harmonics above Nyquist that fold
+ * back as aliasing (measured: -14 dB signal/alias @9 kHz at max drive; compare/drive_alias). Unlike
+ * the EQ (linear, no aliasing), the only clean fix is to run the shaper at a higher rate. This wraps
+ * the drive in the windowed-sinc 2x FIR cascade above (up -> shaper@fs_os -> down), with a user
+ * switch (1x/2x/4x). With os==1 it is BIT-IDENTICAL to the bare zc_drive path (stages=0, no FIR,
+ * DC-blocker at base_fs), so "1x" reproduces the plain drive exactly (no regression). */
+#define ZC_DRV_MAX_STAGES 2   /* 2^2 = 4x maximum for the drive */
+typedef struct {
+  ZcDrive drv;                                   /* shaper + DC-blocker, coeffs set at fs_os */
+  int os, stages;                                /* 1/2/4 ; log2(os) */
+  ZcFir up[ZC_DRV_MAX_STAGES], dn[ZC_DRV_MAX_STAGES];
+} ZcDriveOS;
+
+static inline void zc_driveos_reset(ZcDriveOS *d) {
+  zc_drive_reset(&d->drv);
+  for (int s = 0; s < d->stages; s++) { zc_fir_reset(&d->up[s]); zc_fir_reset(&d->dn[s]); }
+}
+/* set gain/DC-blocker for the (possibly oversampled) rate; recomputes os/stages. Does NOT reset the
+ * FIR/DC state -> safe for a live knob move (same os). Caller resets when os changes or on engage. */
+static inline void zc_driveos_set(ZcDriveOS *d, double knob, double base_fs, int os) {
+  d->os = os; d->stages = 0; for (int o = os; o > 1; o >>= 1) d->stages++;
+  zc_drive_set(&d->drv, knob, base_fs * os);     /* DC-blocker frequency tracks fs_os */
+}
+/* process a block: upsample (2x cascade) -> memoryless shaper@fs_os -> downsample. os==1 = bare path.
+ * sa/sb = ping-pong scratch, each >= n*os doubles. */
+static inline void zc_driveos_process(ZcDriveOS *d, const float *in, float *out, int n,
+                                       double *sa, double *sb) {
+  if (d->os == 1) { for (int i = 0; i < n; i++) out[i] = (float)zc_drive_tick(&d->drv, in[i]); return; }
+  double *cur = sa, *nxt = sb; int len = n;
+  for (int i = 0; i < n; i++) cur[i] = in[i];
+  for (int s = 0; s < d->stages; s++) {          /* upsample: each stage 2x (FIR has memory) */
+    for (int i = 0; i < len; i++) {
+      zc_fir_push(&d->up[s], cur[i]);   nxt[2 * i]     = zc_fir_conv(&d->up[s]) * 2.0;
+      zc_fir_push(&d->up[s], 0.0);      nxt[2 * i + 1] = zc_fir_conv(&d->up[s]) * 2.0;
+    }
+    len *= 2; double *t = cur; cur = nxt; nxt = t;
+  }
+  for (int i = 0; i < len; i++) cur[i] = zc_drive_tick(&d->drv, cur[i]);   /* shaper at fs_os */
+  for (int s = 0; s < d->stages; s++) {          /* downsample: each stage /2 */
+    int half = len / 2;
+    for (int i = 0; i < half; i++) {
+      zc_fir_push(&d->dn[s], cur[2 * i]); zc_fir_push(&d->dn[s], cur[2 * i + 1]);
+      nxt[i] = zc_fir_conv(&d->dn[s]);
+    }
+    len = half; double *t = cur; cur = nxt; nxt = t;
+  }
+  for (int i = 0; i < n; i++) out[i] = (float)cur[i];
+}
+
+/* Latency (samples, at the base rate) the drive oversampling adds: the group delay of the up/down FIR
+ * round-trip for a given os. The shaper is memoryless (0 delay), so this IS the whole drive-OS latency.
+ * os==1 -> 0. Measured with an impulse through the FIR cascade only (no shaper). */
+static inline float zc_driveos_latency(int os) {
+  if (os <= 1) return 0.0f;
+  int stages = 0; for (int o = os; o > 1; o >>= 1) stages++;
+  ZcFir up[ZC_DRV_MAX_STAGES], dn[ZC_DRV_MAX_STAGES];
+  for (int s = 0; s < stages; s++) { zc_fir_reset(&up[s]); zc_fir_reset(&dn[s]); }
+  enum { N = 256 };
+  double a[N * 4], b[N * 4], *cur = a, *nxt = b; int len = N;
+  for (int i = 0; i < N; i++) cur[i] = (i == 0) ? 1.0 : 0.0;
+  for (int s = 0; s < stages; s++) {
+    for (int i = 0; i < len; i++) {
+      zc_fir_push(&up[s], cur[i]);  nxt[2 * i]     = zc_fir_conv(&up[s]) * 2.0;
+      zc_fir_push(&up[s], 0.0);     nxt[2 * i + 1] = zc_fir_conv(&up[s]) * 2.0;
+    }
+    len *= 2; double *t = cur; cur = nxt; nxt = t;
+  }
+  for (int s = 0; s < stages; s++) {
+    int half = len / 2;
+    for (int i = 0; i < half; i++) {
+      zc_fir_push(&dn[s], cur[2 * i]); zc_fir_push(&dn[s], cur[2 * i + 1]);
+      nxt[i] = zc_fir_conv(&dn[s]);
+    }
+    len = half; double *t = cur; cur = nxt; nxt = t;
+  }
+  double num = 0, den = 0;
+  for (int i = 0; i < len; i++) { double e = cur[i] * cur[i]; num += i * e; den += e; }
+  return den > 0 ? (float)(num / den) : 0.0f;
+}
+
+/* ----------------------------------------------------------------- full chain
+ * The EQ is analog-matched (matched-Z + FIR correction): it reproduces the analog magnitude near
+ * Nyquist WITHOUT cramping, so the chain runs at the base sample rate — one biquad-style section per
+ * band, no oversampling, no latency. (Aliasing only matters for the non-linear DRIVE, which has its
+ * own oversampling above; the EQ is linear and needs none.) */
 #define ZC_MAX_SEC 6      /* HP + 4 bands + LP */
-#define ZC_MAX_STAGES 3   /* 2^3 = 8x maximum */
 
 typedef struct {
   ZcSection sec[ZC_MAX_SEC];
   int    nsec;
-  int    os;                 /* 1, 2, 4, 8 */
-  int    stages;             /* log2(os) */
-  double fs_os;              /* fs * os */
-  ZcFir up[ZC_MAX_STAGES], dn[ZC_MAX_STAGES];
+  double fs;                 /* sample rate the sections were designed at */
 } ZcChain;
 
 static inline void zc_chain_reset_state(ZcChain *c) {
   for (int i = 0; i < c->nsec; i++) zc_section_reset(&c->sec[i]);
-  for (int s = 0; s < c->stages; s++) { zc_fir_reset(&c->up[s]); zc_fir_reset(&c->dn[s]); }
 }
 
-/* runs the cascade of sections (at fs_os) over one sample */
+/* runs the cascade of sections over one sample */
 static inline double zc_chain_tick(ZcChain *c, double x) {
   for (int i = 0; i < c->nsec; i++) x = zc_section_tick(&c->sec[i], x);
   return x;
 }
 
-/* processes a block: upsample (cascade of 2x) -> IIR cascade -> downsample.
- * 'sa' and 'sb' = ping-pong scratch, each one >= n*os samples. */
-static inline void zc_chain_process(ZcChain *c, const float *in, float *out,
-                                       int n, double *sa, double *sb) {
-  if (c->os == 1) {
-    for (int i = 0; i < n; i++) out[i] = (float)zc_chain_tick(c, in[i]);
-    return;
-  }
-  double *cur = sa, *nxt = sb;
-  int len = n;
-  for (int i = 0; i < n; i++) cur[i] = in[i];
-  /* upsampling: each stage 2x, FORWARD (the FIR has memory) */
-  for (int s = 0; s < c->stages; s++) {
-    for (int i = 0; i < len; i++) {
-      zc_fir_push(&c->up[s], cur[i]);
-      nxt[2 * i] = zc_fir_conv(&c->up[s]) * 2.0;
-      zc_fir_push(&c->up[s], 0.0);
-      nxt[2 * i + 1] = zc_fir_conv(&c->up[s]) * 2.0;
-    }
-    len *= 2; double *t = cur; cur = nxt; nxt = t;
-  }
-  /* IIR cascade at fs_os */
-  for (int i = 0; i < len; i++) cur[i] = zc_chain_tick(c, cur[i]);
-  /* downsampling: each stage /2 */
-  for (int s = 0; s < c->stages; s++) {
-    int half = len / 2;
-    for (int i = 0; i < half; i++) {
-      zc_fir_push(&c->dn[s], cur[2 * i]);
-      zc_fir_push(&c->dn[s], cur[2 * i + 1]);
-      nxt[i] = zc_fir_conv(&c->dn[s]);
-    }
-    len = half; double *t = cur; cur = nxt; nxt = t;
-  }
-  for (int i = 0; i < n; i++) out[i] = (float)cur[i];
+/* processes a block: the IIR cascade, sample by sample, at the base rate */
+static inline void zc_chain_process(ZcChain *c, const float *in, float *out, int n) {
+  for (int i = 0; i < n; i++) out[i] = (float)zc_chain_tick(c, in[i]);
 }
 
 /* ----------------------------------------------------------------- controls -> chain */
@@ -307,9 +334,9 @@ static inline const double *zc_cap_band(int b) {
                case 2: return ZC_CAP_HIMID; default: return ZC_CAP_HI; }
 }
 
-/* fills c->sec[] and c->nsec from the controls (at c->fs_os). Does NOT touch the z[] state. */
+/* fills c->sec[] and c->nsec from the controls (at c->fs). Does NOT touch the z[] state. */
 static inline void zc_chain_fill(ZcChain *c, const ZcControls *ct) {
-  double fs = c->fs_os; c->nsec = 0;
+  double fs = c->fs; c->nsec = 0;
   if (ct->hp_on) {
     double fc = zc_interp(ct->hp_freq, ZC_HP_NORM, ZC_HP_HZ, ZC_ARRLEN(ZC_HP_NORM));
     double q = ct->hp_bump ? ZC_HP_Q : ZC_HP_Q_FLAT;
@@ -337,105 +364,16 @@ static inline void zc_chain_fill(ZcChain *c, const ZcControls *ct) {
   }
 }
 
-/* builds the chain FROM SCRATCH (structure/OS change): fills + RESETS state. */
-static inline void zc_chain_build(ZcChain *c, const ZcControls *ct,
-                                     double base_fs, int os) {
-  c->os = os; c->stages = 0; for (int o = os; o > 1; o >>= 1) c->stages++;
-  c->fs_os = base_fs * os;
+/* builds the chain FROM SCRATCH (structure change): fills + RESETS state. */
+static inline void zc_chain_build(ZcChain *c, const ZcControls *ct, double base_fs) {
+  c->fs = base_fs;
   zc_chain_fill(c, ct);
   zc_chain_reset_state(c);
 }
 
-/* LIVE refresh of coefficients (structure/OS unchanged): keeps state -> no clicks. */
+/* LIVE refresh of coefficients (structure unchanged): keeps state -> no clicks. */
 static inline void zc_chain_update(ZcChain *c, const ZcControls *ct) {
   zc_chain_fill(c, ct);
-}
-
-/* ----------------------------------------------------------------- ADAPTIVE oversampling
- * The EQ is LINEAR: there is no aliasing to suppress. The only reason for oversampling is to avoid
- * bilinear "cramping" near Nyquist (high resonant/bright sections). So the OS
- * needed depends on the MATERIAL: a dark chain runs at 1x (= minimum cost); it only rises to
- * 2x/4x when there is high resonant content. This is the C version of modelo_v2.discretiza_adaptive:
- * for each section we look for the minimum OS whose bilinear-vs-analog error < target_db in the
- * AUDIBLE band (where |H|>=-15 dB; cramping in the deep stopband is inaudible); the chain's OS =
- * the maximum of those per-section OS. */
-
-/* |H| of a polynomial (DESCENDING coeffs) evaluated at s = jw.
- * (jw)^d = j^d * w^d; j^d cycles {1, j, -1, -j} with d mod 4 -> (cs[d&3], sn[d&3]). */
-static inline double zc_mag_s(const double *c, int n, double w) {
-  static const double cs[4] = {1,0,-1,0}, sn[4] = {0,1,0,-1};
-  int M = n - 1; double re = 0.0, im = 0.0;
-  for (int k = 0; k <= M; k++) {
-    int d = M - k;
-    double wd = 1.0; for (int e = 0; e < d; e++) wd *= w;   /* w^d (d small: <= polynomial order) */
-    re += c[k]*wd*cs[d&3]; im += c[k]*wd*sn[d&3];
-  }
-  return hypot(re, im);
-}
-/* |H| of a polynomial (DESCENDING coeffs in z) evaluated at z = e^{j*th}. */
-static inline double zc_mag_z(const double *c, int n, double th) {
-  int M = n - 1; double re = 0.0, im = 0.0;
-  for (int k = 0; k <= M; k++) { int d = M - k; re += c[k]*cos(d*th); im += c[k]*sin(d*th); }
-  return hypot(re, im);
-}
-/* minimum OS (from os_opts) that keeps the bilinear error < target_db in the section's audible band.
- * b/a = ANALOG descending coeffs (nb/na = lengths). */
-static inline int zc_section_os(const double *b, int nb, const double *a, int na,
-                                double base_fs, double target_db, const int *os_opts, int nopt) {
-  enum { NF = 48 };
-  double fmax = 0.45 * base_fs; if (fmax > 16000.0) fmax = 16000.0;
-  const double fmin = 20.0, lr = log(fmax / fmin);
-  double ha[NF], fr[NF];
-  for (int i = 0; i < NF; i++) {
-    double f = fmin * exp(lr * i / (NF - 1)); fr[i] = f; double w = 2.0*M_PI*f;
-    ha[i] = 20.0 * log10(zc_mag_s(b, nb, w) / zc_mag_s(a, na, w));
-  }
-  for (int o = 0; o < nopt; o++) {
-    int OS = os_opts[o]; double fsos = base_fs * OS;
-    double bz[4], az[4]; int order = zc_bilinear(b, nb, a, na, fsos, bz, az);
-    double emax = 0.0;
-    for (int i = 0; i < NF; i++) {
-      if (ha[i] < -15.0) continue;                 /* only where the filter PASSES: the rest is inaudible */
-      double th = 2.0*M_PI*fr[i]/fsos;
-      double hd = 20.0 * log10(zc_mag_z(bz, order+1, th) / zc_mag_z(az, order+1, th));
-      double e = fabs(hd - ha[i]); if (e > emax) emax = e;
-    }
-    if (emax <= target_db) return OS;
-  }
-  return os_opts[nopt - 1];
-}
-/* GLOBAL adaptive OS of the chain = max of the per-active-section minimum OS. Iterates over the same
- * sections as zc_chain_fill, but requesting the ANALOG coeffs (does not discretize). */
-static inline int zc_chain_adaptive_os(const ZcControls *ct, double base_fs, double target_db) {
-  static const int OPTS[3] = {1, 2, 4};
-  int os = 1; double b[4], a[4]; int nb, na;
-  if (ct->hp_on) {
-    double fc = zc_interp(ct->hp_freq, ZC_HP_NORM, ZC_HP_HZ, ZC_ARRLEN(ZC_HP_NORM));
-    double q = ct->hp_bump ? ZC_HP_Q : ZC_HP_Q_FLAT;
-    zc_hp_analog(fc, q, b, &nb, a, &na);
-    int o = zc_section_os(b, nb, a, na, base_fs, target_db, OPTS, 3); if (o > os) os = o;
-  }
-  for (int bd = 0; bd < 4; bd++) {
-    if (!ct->band[bd].on) continue;
-    if ((bd == 0 || bd == 3) && ct->band[bd].shelf) {
-      ZcKind kind = (bd == 3) ? ZC_HISHELF : ZC_LOSHELF;
-      const float *ft = (bd == 3) ? ZC_FTAP_HI_SHELF : ZC_FTAP_LO_SHELF;
-      const float *wt = (bd == 3) ? ZC_WTAP_HI_SHELF : ZC_WTAP_LO_SHELF;
-      const double *cap = (bd == 3) ? ZC_CAP_HI_SHELF : ZC_CAP_LO_SHELF;
-      zc_bellshelf_analog(kind, ft, wt, cap, ct->band[bd].freq, ct->band[bd].gain, b, &nb, a, &na);
-    } else {
-      zc_bellshelf_analog(ZC_BELL, zc_ftap_band(bd), zc_wtap_band(bd), zc_cap_band(bd),
-                          ct->band[bd].freq, ct->band[bd].gain, b, &nb, a, &na);
-    }
-    int o = zc_section_os(b, nb, a, na, base_fs, target_db, OPTS, 3); if (o > os) os = o;
-  }
-  if (ct->lp_on) {
-    double fc = zc_interp(ct->lp_freq, ZC_LP_NORM, ZC_LP_HZ, ZC_ARRLEN(ZC_LP_NORM));
-    double Q = ct->lp_resonant ? ZC_LP_Q_RESONANT : ZC_LP_Q_CLEAN;
-    zc_lp_analog(fc, Q, b, &nb, a, &na);
-    int o = zc_section_os(b, nb, a, na, base_fs, target_db, OPTS, 3); if (o > os) os = o;
-  }
-  return os;
 }
 
 #endif /* ZC_DSP_H */

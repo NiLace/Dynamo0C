@@ -42,7 +42,7 @@ int main(int argc, char **argv) {
   LV2_Handle inst=d->instantiate(d,SR,"",NULL);
   if(!inst){fprintf(stderr,"instantiate failed\n");return 1;}
   for(int i=0;i<ZC_N_PORTS;i++) ports[i]=0;
-  ports[P_POWER]=1; ports[P_EQ_ON]=1; ports[P_OVERSAMPLE]=2; ports[P_LP_FREQ]=1.0f;
+  ports[P_POWER]=1; ports[P_EQ_ON]=1; ports[P_LP_FREQ]=1.0f;
   ports[P_HI_FREQ]=ports[P_HIMID_FREQ]=ports[P_LOMID_FREQ]=ports[P_LO_FREQ]=0.5f;
   ports[P_HI_GAIN]=ports[P_HIMID_GAIN]=ports[P_LOMID_GAIN]=ports[P_LO_GAIN]=0.5f;
   ports[P_HP_ON]=0; ports[P_LP_ON]=0;

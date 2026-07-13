@@ -80,7 +80,6 @@ static const Switch SWITCHES[ZC_NSW] = {
 };
 #define SWITCH_Y   (BAND_Y(5) + 4)
 #define SWITCH_H   24
-#define FOOTER_Y   (SWITCH_Y + SWITCH_H + 18)
 
 /* ---------------- colors ---------------- */
 #define ZC_FONT "Roboto Condensed"   /* fallback if the TTFs were not bundled (zc_face[]=NULL) */
@@ -376,6 +375,40 @@ static void draw_switch(cairo_t *cr, int i, int lit) {
   txt(cr, x+w/2, y+h/2+3.5, s->label, 9.5, ZF_LABEL, 1, r,g,b, 1.2, 1);
 }
 
+/* ---------------- settings overlay (opened by clicking the brand "DYNAMO 0C") ----------------
+ * A dimmed backdrop + a centred card that hosts the extra settings that don't live on the main
+ * panel. It controls the DRIVE Oversampling (P_DRIVE_OS): the drive shaper is non-linear so it
+ * aliases -> 2x/4x suppress it. (The EQ is analog-matched and runs at the base rate, so there is no
+ * EQ oversampling to expose.) Geometry is SHARED by the draw code (zc_draw_settings) and the UI
+ * hit-test (ui.c on_press), so they can never desync. */
+#define BRAND_HX0 12.0
+#define BRAND_HY0 15.0
+#define BRAND_HX1 150.0     /* the DRIVE knob sits at x=210 -> no overlap */
+#define BRAND_HY1 38.0
+static inline int brand_hit(double x, double y) {
+  return x >= BRAND_HX0 && x <= BRAND_HX1 && y >= BRAND_HY0 && y <= BRAND_HY1;
+}
+#define SET_CARD_W 210.0
+#define SET_CARD_H 96.0
+#define SET_CARD_X ((PANEL_W - SET_CARD_W) / 2.0)
+#define SET_CARD_Y ((PANEL_H - SET_CARD_H) / 2.0)
+#define SET_CLOSE_CX (SET_CARD_X + SET_CARD_W - 17.0)
+#define SET_CLOSE_CY (SET_CARD_Y + 17.0)
+#define SET_CLOSE_R  10.0     /* click hotspot radius */
+#define SET_NOPT 3            /* drive oversampling: 1x(off)/2x/4x -> P_DRIVE_OS values 0/1/2 */
+static const char *SET_OS_LBL[SET_NOPT] = { "1x", "2x", "4x" };
+/* geometry of oversample segment i inside the card (shared draw + hit-test) */
+static inline void set_seg_rect(int i, double *x, double *y, double *w, double *h) {
+  const double m = 15.0, gap = 8.0;
+  double tw = SET_CARD_W - 2*m;
+  *w = (tw - (SET_NOPT-1)*gap) / (double)SET_NOPT;
+  *x = SET_CARD_X + m + i*(*w + gap);
+  *y = SET_CARD_Y + 48.0; *h = 30.0;
+}
+static inline int set_in_card(double x, double y) {
+  return x >= SET_CARD_X && x <= SET_CARD_X+SET_CARD_W && y >= SET_CARD_Y && y <= SET_CARD_Y+SET_CARD_H;
+}
+
 /* ---------------- full panel ----------------
  * v   = control values (indexed by port)
  * showk = index of the knob with active read-out (-1 = none) */
@@ -422,6 +455,51 @@ static void zc_draw_panel(cairo_t *cr, const float *v, int showk, ZcHit *hits, i
     draw_switch(cr, i, lit);
   }
 
+}
+
+/* settings overlay: dim the panel, redraw the brand in ORANGE (so it stays visible + signals the
+ * open state), then a card with the Drive Oversampling selector. hover_seg/-close = -1 if none. */
+static void zc_draw_settings(cairo_t *cr, const float *v, int hover_seg, int hover_close) {
+  /* dim backdrop over the whole panel */
+  cola(cr, 0, 0, 0, 0.62); cairo_rectangle(cr, 0, 0, PANEL_W, PANEL_H); cairo_fill(cr);
+  /* brand redrawn orange (it lives under the dim otherwise) */
+  txt_dot0(cr, 14, 32, "DYNAMO 0C", 18, ZF_BRAND, 1, ACC_R, ACC_G, ACC_B, 0.6, 0);
+  txt(cr, 15, 44, "PARAMETRIC EQ", 7.5, ZF_LABEL, 1, ACC_R*0.7, ACC_G*0.7, ACC_B*0.7, 2.0, 0);
+
+  /* card */
+  rrect(cr, SET_CARD_X, SET_CARD_Y, SET_CARD_W, SET_CARD_H, 10);
+  cairo_pattern_t *p = cairo_pattern_create_linear(0, SET_CARD_Y, 0, SET_CARD_Y+SET_CARD_H);
+  cairo_pattern_add_color_stop_rgb(p, 0, 0.160, 0.155, 0.150);
+  cairo_pattern_add_color_stop_rgb(p, 1, 0.098, 0.095, 0.090);
+  cairo_set_source(cr, p); cairo_fill_preserve(cr); cairo_pattern_destroy(p);
+  cola(cr, ACC_R, ACC_G, ACC_B, 0.55); cairo_set_line_width(cr, 1.2); cairo_stroke(cr);
+
+  /* title */
+  txt(cr, SET_CARD_X+16, SET_CARD_Y+30, "DRIVE OVERSAMPLING", 11, ZF_HEAD, 1, ACC_R, ACC_G, ACC_B, 1.4, 0);
+
+  /* segmented selector for P_DRIVE_OS (1x=off / 2x / 4x) */
+  int cur = (int)(v[P_DRIVE_OS] + 0.5f); if (cur < 0) cur = 0; if (cur > SET_NOPT-1) cur = SET_NOPT-1;
+  for (int i = 0; i < SET_NOPT; i++) {
+    double x, y, w, h; set_seg_rect(i, &x, &y, &w, &h);
+    rrect(cr, x, y, w, h, 4);
+    if (i == cur)               cola(cr, ACC_R, ACC_G, ACC_B, 0.88);
+    else if (i == hover_seg)     cola(cr, 1, 1, 1, 0.11);
+    else                         cola(cr, 1, 1, 1, 0.05);
+    cairo_fill_preserve(cr);
+    cola(cr, 0, 0, 0, 0.5); cairo_set_line_width(cr, 1); cairo_stroke(cr);
+    int on = (i == cur);
+    txt(cr, x+w/2, y+h/2+3.5, SET_OS_LBL[i], 9.5, ZF_LABEL, 1,
+        on?0.06:0.82, on?0.05:0.79, on?0.04:0.72, 1.0, 1);
+  }
+
+  /* close X (top-right of the card) */
+  double a = hover_close ? 1.0 : 0.72;
+  cola(cr, ACC_R, ACC_G, ACC_B, a);
+  cairo_set_line_width(cr, 1.6); cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+  double r = 5.0;
+  cairo_move_to(cr, SET_CLOSE_CX-r, SET_CLOSE_CY-r); cairo_line_to(cr, SET_CLOSE_CX+r, SET_CLOSE_CY+r);
+  cairo_move_to(cr, SET_CLOSE_CX+r, SET_CLOSE_CY-r); cairo_line_to(cr, SET_CLOSE_CX-r, SET_CLOSE_CY+r);
+  cairo_stroke(cr);
 }
 
 #endif /* ZC_UI_PANEL_H */

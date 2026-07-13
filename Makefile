@@ -25,8 +25,9 @@ LV2GUI   = Dynamo-0C_UI
 BUNDLE   = dynamo-0c.lv2
 LIB_EXT  = .so
 
-# UI: off by default. make BUILDUI=yes to also build the graphical interface.
-BUILDUI ?= no
+# UI: on by default (the plugin ships with its Pugl/Cairo interface). make BUILDUI=no for a headless
+# DSP-only build for headless environments (no X11/cairo available).
+BUILDUI ?= yes
 
 override CFLAGS += -fPIC -fvisibility=hidden -pthread
 override CFLAGS += `$(PKG_CONFIG) --cflags lv2`

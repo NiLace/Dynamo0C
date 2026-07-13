@@ -38,15 +38,18 @@ typedef enum {
   P_LP_ON     = 19,  /* toggle */
   P_LP_MODE   = 20,  /* toggle: 0=clean (Q=0.707, no peak) 1=resonant (Q=0.99, with boost) */
 
-  /* quality / output */
-  P_OVERSAMPLE= 21,  /* enum: 0=1x 1=2x 2=4x 3=Auto (adaptive to the material) */
-  P_LATENCY   = 22,  /* output: latency in samples */
+  /* output */
+  P_LATENCY   = 21,  /* output: latency in samples (0 unless drive oversampling is engaged) */
 
-  P_HP_BUMP   = 23,  /* HP toggle: 0=clean (Butterworth) 1=resonant (boost ~+1.5 dB at the cutoff) */
+  P_HP_BUMP   = 22,  /* HP toggle: 0=clean (Butterworth) 1=resonant (boost ~+1.5 dB at the cutoff) */
 
   /* channel drive (console-style input stage). norm 0..1, 0=bypass (auto-on when the knob moves).
    * 0.5 = nominal intensity of the reference console; >0.5 pushes harder. Bounded asym. shaper + DC-block. */
-  P_DRIVE     = 24,
+  P_DRIVE     = 23,
+
+  /* drive oversampling: suppresses the aliasing of the memoryless shaper. Only engages when the
+   * drive itself is active; adds latency (FIR round-trip) only then. 0=1x 1=2x 2=4x. */
+  P_DRIVE_OS  = 24,  /* enum: 0=1x (bit-identical to the bare drive) 1=2x 2=4x */
 
   ZC_N_PORTS  = 25
 } PortIndex;
