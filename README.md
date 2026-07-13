@@ -29,12 +29,19 @@ the top the way a naïve digital EQ does. The whole thing is voiced to feel like
 turning knobs on a desk rather than dialling numbers into a plugin: smooth,
 forgiving, hard to make sound harsh.
 
-<p align="center"><img src="assets/images/eq_response.png" alt="Dynamo 0C frequency response — plugin vs analogue model, BUMP off and on" width="720"></p>
+<p align="center"><img src="assets/images/eq_response.png" alt="Dynamo 0C frequency response — plugin vs analogue model (clean), with BUMP shown as a voiced knee" width="720"></p>
 
 The curve above is a full EQ pass with the high-pass and low-pass filters engaged.
-The plugin (solid) sits right on top of the analogue prototype it's modelled on
-(dashed) — they agree to well under 0.3&nbsp;dB across the whole spectrum — and the
-**BUMP** switch adds the resonant knee you can see at the two filter corners.
+The plugin (solid) sits right on top of the analogue model it's built from (white
+dashed) — they agree to well under 0.3&nbsp;dB across the whole spectrum. Notice the
+dashed reference is drawn only for the clean state: the modelled circuit's filter
+corners are flat.
+
+The **BUMP** switch adds the resonant knee you can see at the two filter corners
+(the orange curve). This is a **plugin-only voicing option, not part of the original
+hardware** — the modelled unit has no such corner resonance. BUMP is just a gentle
+extra lift for when you want a little more punch and edge; leave it off for the
+faithful, clean response.
 
 ### The four bands
 
