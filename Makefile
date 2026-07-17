@@ -26,7 +26,7 @@ BUNDLE   = dynamo-0c.lv2
 LIB_EXT  = .so
 
 # UI: on by default (the plugin ships with its Pugl/Cairo interface). make BUILDUI=no for a headless
-# DSP-only build for headless environments (no X11/cairo available).
+# DSP-only build (e.g. automated null/oracle testing where no X11/cairo is available).
 BUILDUI ?= yes
 
 override CFLAGS += -fPIC -fvisibility=hidden -pthread
@@ -101,14 +101,28 @@ $(BUILDDIR)gain_probe: gain_probe.c ports.h uris.h
 	@mkdir -p $(BUILDDIR)
 	$(CC) $(CFLAGS) -o $@ gain_probe.c -lm -ldl
 
+# ATOMIC INSTALL -- every file goes to a temp name and is then mv'd (rename(2)) into place.
+# Do NOT go back to installing straight over the destination. MEASURED on this very path:
+# both `cp` AND GNU `install` keep the SAME INODE, i.e. they truncate and rewrite the file in
+# place. If a host (Ardour) has that .so mmap'd, its not-yet-faulted pages then come from the NEW
+# file -> it executes garbage and dies with SIGSEGV/SIGBUS. It crashed Ardour on every install.
+# rename(2) instead gives the new file a NEW inode and leaves the old one alive for whoever still
+# has it mapped, so a running host keeps working and picks the new code up when it next dlopens.
+# (A /tmp probe wrongly suggested `install` was safe -- tmpfs behaved differently. Measure on the
+#  real path, never on a proxy.)
+D = $(DESTDIR)$(LV2DIR)/$(BUNDLE)
 install: all
-	install -d $(DESTDIR)$(LV2DIR)/$(BUNDLE)
-	install -m755 $(targets) $(DESTDIR)$(LV2DIR)/$(BUNDLE)
-	install -m644 $(BUILDDIR)manifest.ttl $(BUILDDIR)$(LV2NAME).ttl $(DESTDIR)$(LV2DIR)/$(BUNDLE)
+	install -d $(D)
+	@for f in $(targets); do b=`basename $$f`; \
+	  install -m755 $$f $(D)/.$$b.new && mv -f $(D)/.$$b.new $(D)/$$b; done
+	@for f in $(BUILDDIR)manifest.ttl $(BUILDDIR)$(LV2NAME).ttl; do b=`basename $$f`; \
+	  install -m644 $$f $(D)/.$$b.new && mv -f $(D)/.$$b.new $(D)/$$b; done
 ifneq ($(BUILDUI), no)
-	install -d $(DESTDIR)$(LV2DIR)/$(BUNDLE)/fonts
-	install -m644 fonts/*.ttf fonts/OFL.txt $(DESTDIR)$(LV2DIR)/$(BUNDLE)/fonts
+	install -d $(D)/fonts
+	@for f in fonts/*.ttf fonts/OFL.txt; do b=`basename $$f`; \
+	  install -m644 $$f $(D)/fonts/.$$b.new && mv -f $(D)/fonts/.$$b.new $(D)/fonts/$$b; done
 endif
+	@echo "installed atomically to $(D)"
 
 uninstall:
 	rm -rf $(DESTDIR)$(LV2DIR)/$(BUNDLE)

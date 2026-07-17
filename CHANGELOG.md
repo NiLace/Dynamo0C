@@ -3,6 +3,45 @@
 All notable changes to **Dynamo 0C EQ** are recorded here, newest first. Versions
 follow [semantic versioning](https://semver.org).
 
+## [1.2.0] — 2026-07-18
+
+An interface release. **The sound is untouched** — the DSP is byte-for-byte the same
+code as 1.1.0, so 1.2.0 will render identically. Everything below is the panel and
+what it costs to draw.
+
+### Changed — the interface
+- **The panel was rebuilt** in the house visual language: a floating chassis, a shared
+  knob spec, proper bevels and glows, and softer engage/bypass fades (0.2 s).
+- **The title is now the bypass.** Clicking “DYNAMO 0C” engages or bypasses the whole
+  plugin — lit orange when engaged, plain white when bypassed, and the panel dims. The
+  old **Power** button is gone from the switch bank, which leaves `LF HF EQ BUMP` with
+  more room to breathe.
+- **The settings window opens from the DRIVE label** instead of the title (which now
+  has the bypass job). Same window, same ✕ / click-outside to close.
+- **The oversampling setting is visible without opening anything.** The DRIVE label
+  reads plain `DRIVE` at 1x, and `DRIVE 2x` / `DRIVE 4x` when it is on. Oversampling
+  costs latency, so it should not hide behind a click.
+- **The DRIVE label is coloured like the control it is** — copper when idle, flat
+  white while its window is open, the same grammar the title uses for the bypass.
+
+### Fixed
+- **An open plugin window no longer eats a CPU core.** The panel used to redraw
+  everything, meter to chassis, on every event. The parts that never move are now
+  rendered once and blitted, the live pass draws only what a value actually moves, and
+  repaints are capped at 30 fps: **~19.9 ms → ~0.3 ms per frame (~64× cheaper)**. On a
+  session with several instances open this is the difference between a fan spinning up
+  and not.
+- **Letter spacing no longer breaks up words.** Cairo rounds each glyph advance to a
+  whole pixel by default, which at label sizes inflates some letters and shrinks
+  others — enough that “DRIVE” read as “D RIVE”. Metric hinting is now off, so
+  advances stay fractional and spacing is even. It matters more the further you
+  resize the window from 1:1, since the panel scales.
+- **Knobs are no longer blurry on HiDPI.** The cached knob skirt was rendered at
+  logical size and scaled up; it is now cached at device resolution.
+- **`make install` no longer risks taking the host down with it.** It used to rewrite
+  the `.so` in place — if a host had it mapped, that is a crash. It now installs to a
+  temporary name and renames atomically.
+
 ## [1.1.0] — 2026-07-13
 
 A big release. The equaliser was rebuilt from the ground up for higher fidelity, the
@@ -67,6 +106,8 @@ channel drive gained optional anti-aliasing, and the interface got a settings wi
 **Compare between versions** (full source diff):
 
 - **1.0.0 → 1.1.0:** <https://github.com/NiLace/Dynamo0C/compare/v1.0.0...v1.1.0>
+- **1.1.0 → 1.2.0:** <https://github.com/NiLace/Dynamo0C/compare/v1.1.0...v1.2.0>
 
+[1.2.0]: https://github.com/NiLace/Dynamo0C/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/NiLace/Dynamo0C/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/NiLace/Dynamo0C/releases/tag/v1.0.0
