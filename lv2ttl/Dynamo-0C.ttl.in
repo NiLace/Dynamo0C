@@ -24,7 +24,7 @@
 		foaf:homepage <https://github.com/NiLace> ;
 		foaf:mbox <mailto:nilace@nylarea.com>
 	] ;
-	lv2:minorVersion 4 ; lv2:microVersion 0 ;
+	lv2:minorVersion 6 ; lv2:microVersion 0 ;
 	@ZC_UI@
 	lv2:optionalFeature lv2:hardRTCapable ;
 

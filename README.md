@@ -103,13 +103,16 @@ more. At its nominal setting it's a subtle sheen, not a fuzzbox.
 All continuous controls are knobs with a live read-out (Hz / kHz / dB); gain
 knobs sit at centre for 0 dB.
 
+- **The title** (“DYNAMO 0C”, top-left) is the **bypass**. Click it to engage or
+  bypass the whole plugin: lit orange = engaged, plain white = bypassed, and the
+  panel dims. It is the one control that still answers while bypassed.
 - **Drive**, top right — the input-stage drive. `0` is bypass; higher pushes harder.
+  Its **DRIVE** label is also a control — see the settings window below.
 - **High / Hi-Mid / Lo-Mid / Low** — frequency and gain per band. On **High** and
   **Low** the bell/shelf icon is clickable (as are the `LF` / `HF` switches).
 - **Filters** — the **HP** and **LP** knobs.
-- The switch bank along the bottom: **Power** (bypass everything), **LF** / **HF**
-  (bell ↔ shelf for Low / High), **EQ** (engage the four bands) and **BUMP** (the
-  resonant knee on both filters).
+- The switch bank along the bottom: **LF** / **HF** (bell ↔ shelf for Low / High),
+  **EQ** (engage the four bands) and **BUMP** (the resonant knee on both filters).
 
 Drag a knob up or down to set it; hold **Shift** while dragging for **fine
 adjustment**, and **double-click** a knob to snap it back to its default. The
@@ -119,12 +122,14 @@ window is resizable; the panel scales uniformly and letterboxes.
 
 <p align="center"><img src="assets/images/Oversampling.png" alt="Dynamo 0C settings window — Drive Oversampling" width="280"></p>
 
-**Click the plugin title** (“DYNAMO 0C”, top-left) to open the settings window: the
-title turns orange and a small card slides over the panel. Click the title again,
-the **✕**, or anywhere outside the card to close it.
+**Click the DRIVE label** (the word “DRIVE”, next to the drive knob) to open the
+settings window: a small card slides over the panel and dims it. Click the **✕**, or
+anywhere outside the card, to close it.
 
 For now it holds a single setting — **Drive Oversampling** — which controls how the
-non-linear channel drive is anti-aliased:
+non-linear channel drive is anti-aliased. Whatever you pick, the **DRIVE label tells
+you where you are**: it reads plain `DRIVE` at 1x, and `DRIVE 2x` / `DRIVE 4x` once
+oversampling is on — so a setting that costs latency is never hidden behind a click.
 
 - **1x** — the drive runs at the session rate. No added latency; identical to how the
   drive has always sounded. The default.

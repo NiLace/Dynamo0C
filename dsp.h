@@ -34,9 +34,9 @@
 #define ZC_ARRLEN(a) ((int)(sizeof(a) / sizeof((a)[0])))
 
 /* high-pass Q per the BUMP button: 0.707 = flat Butterworth (no peak); ZC_HP_Q (~1.0) is a
- * deliberate VOICING choice — a gentle resonant lift (~+1.5 dB) just above the corner, in the
- * spirit of a console filter knee. It is hand-set, NOT part of the modelled hardware (whose
- * filter corners are flat); same for ZC_LP_Q_RESONANT on the low-pass. */
+ * deliberate VOICING choice — a gentle resonant lift (~+1.5 dB) just above the corner. It is
+ * hand-set and NOT taken from the schematic: the netlist has no such resonance. Same for
+ * ZC_LP_Q_RESONANT on the low-pass. (The README says the same thing to users, under BUMP.) */
 #define ZC_HP_Q_FLAT 0.70710678118654752
 
 /* ----------------------------------------------------------------- interpolation */
@@ -97,7 +97,11 @@ static inline void zc_Rt_Rb(double W, double *Rt, double *Rb) {
 }
 
 /* Builds the ANALOG coeffs (b,a descending) of a bell/shelf section
- * from the norm controls (nf, ng) and their tapers/caps. */
+ * from the norm controls (nf, ng) and their tapers/caps.
+ * The ftap/wtap tables are POT-WIPER fractions, not magic numbers: they are design tables derived from the
+ * schematic that make each band's peak sweep log-uniformly (F ≈ exp(-5.55·nf+c), one shared log-pot law;
+ * the caps differ per band). They also carry a ~1% circuit-compensation term, which is why that closed-form
+ * pot law is documented here but NOT substituted for the tables: doing so would move the audio. */
 static inline void zc_bellshelf_analog(ZcKind kind,
         const float *ftap, const float *wtap, const double *cap,
         double nf, double ng, double *b, int *nb, double *a, int *na) {
