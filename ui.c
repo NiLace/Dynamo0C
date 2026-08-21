@@ -28,6 +28,7 @@ typedef struct {
   LV2UI_Write_Function write;
   LV2UI_Controller     controller;
   LV2UI_Resize        *resize;
+  LV2UI_Touch         *touch;      /* ui:touch, optional: NULL if the host does not offer it */
   PuglWorld           *world;
   PuglView            *view;
 
@@ -69,10 +70,28 @@ static void recompute_scale(ZcUI *ui) {
   ui->oy = (ui->win_h - CANVAS_H * ui->scale) / 2.0;
 }
 
-/* ---------- port writes ---------- */
+/* ---------- port writes ----------
+ * ui:touch tells the host that the USER has taken hold of a control and then let go of it. Without
+ * it the host cannot tell an automation write apart from a user gesture, so automation in touch
+ * mode and MIDI learn misbehave. The VST3 equivalent is beginEdit / performEdit / endEdit, in that
+ * order.
+ *
+ * The feature is OPTIONAL: `ui->touch` is NULL when the host does not offer it, and every call goes
+ * through zc_touch, which checks. A host without it behaves as if these calls were absent.
+ * Called from the UI thread only, like everything else here, as the specification requires. */
+static void zc_touch(ZcUI *ui, int port, bool grabbed) {
+  if (ui->touch && ui->touch->touch) ui->touch->touch(ui->touch->handle, (uint32_t)port, grabbed);
+}
 static void write_port(ZcUI *ui, int port, float val) {
   ui->v[port] = val;
   ui->write(ui->controller, (uint32_t)port, sizeof(float), 0, &val);
+}
+/* One-shot change (a switch, the title, a card segment, a double-click reset): the gesture starts
+ * and ends around the single write, which is what the host needs to record it as a user edit. */
+static void write_port_gesture(ZcUI *ui, int port, float val) {
+  zc_touch(ui, port, true);
+  write_port(ui, port, val);
+  zc_touch(ui, port, false);
 }
 static void redraw(ZcUI *ui) { ui->needs_redraw = 1; }
 
@@ -110,7 +129,7 @@ static void on_press(ZcUI *ui, double x, double y) {
     for (int i = 0; i < SET_NOPT; i++) {
       double sx, sy, sw, sh; set_seg_rect(i, &sx, &sy, &sw, &sh);
       if (x >= sx && x <= sx+sw && y >= sy && y <= sy+sh) {
-        write_port(ui, P_DRIVE_OS, (float)i);
+        write_port_gesture(ui, P_DRIVE_OS, (float)i);
         ui->set_open = 0; redraw(ui); ui->last_knob = -1; return;
       }
     }
@@ -121,7 +140,7 @@ static void on_press(ZcUI *ui, double x, double y) {
    * that does). Replaces the old POWER switch. */
   { double tx, ty, tw, th; title_rect(&tx, &ty, &tw, &th);
     if (x >= tx && x <= tx+tw && y >= ty && y <= ty+th) {
-      write_port(ui, P_POWER, ui->v[P_POWER] > 0.5f ? 0.0f : 1.0f);
+      write_port_gesture(ui, P_POWER, ui->v[P_POWER] > 0.5f ? 0.0f : 1.0f);
       redraw(ui); ui->last_knob = -1; return; } }
   /* while bypassed, only the title responds */
   if (ui->v[P_POWER] <= 0.5f) { ui->last_knob = -1; return; }
@@ -137,10 +156,11 @@ static void on_press(ZcUI *ui, double x, double y) {
   int k = knob_at(x, y);
   if (k >= 0) {
     if (ui->last_knob == k && (now - ui->last_press) < DCLICK_S) {   /* double-click = reset */
-      write_port(ui, KNOBS[k].port, (float)KNOBS[k].def);
+      write_port_gesture(ui, KNOBS[k].port, (float)KNOBS[k].def);
       ui->show_knob = k; ui->show_time = now; ui->drag_knob = -1; redraw(ui);
     } else {
       ui->drag_knob = k; ui->drag_yprev = y; ui->drag_val = ui->v[KNOBS[k].port];
+      zc_touch(ui, KNOBS[k].port, true);          /* the gesture starts HERE and ends in on_release */
       ui->show_knob = k; ui->show_time = now; redraw(ui);
     }
     ui->last_knob = k; ui->last_press = now;
@@ -150,15 +170,15 @@ static void on_press(ZcUI *ui, double x, double y) {
   for (int i = 0; i < ui->nhits; i++) {
     const ZcHit *h = &ui->hits[i];
     if (x >= h->x0 && x <= h->x1 && y >= h->y0 && y <= h->y1) {
-      write_port(ui, h->port, ui->v[h->port] > 0.5f ? 0.0f : 1.0f);
+      write_port_gesture(ui, h->port, ui->v[h->port] > 0.5f ? 0.0f : 1.0f);
       redraw(ui); ui->last_knob = -1; return;
     }
   }
   int s = switch_at(x, y);
   if (s >= 0) {
     float nv = ui->v[SWITCHES[s].port] > 0.5f ? 0.0f : 1.0f;
-    write_port(ui, SWITCHES[s].port, nv);
-    if (SWITCHES[s].port2 >= 0) write_port(ui, SWITCHES[s].port2, nv);   /* BUMP: HP bump + LP resonant together */
+    write_port_gesture(ui, SWITCHES[s].port, nv);
+    if (SWITCHES[s].port2 >= 0) write_port_gesture(ui, SWITCHES[s].port2, nv);   /* BUMP: HP bump + LP resonant together */
     redraw(ui);
   }
   ui->last_knob = -1;
@@ -192,7 +212,10 @@ static void on_motion(ZcUI *ui, double y, unsigned mods) {
   ui->show_knob = k; ui->show_time = puglGetTime(ui->world);
   redraw(ui);
 }
-static void on_release(ZcUI *ui) { ui->drag_knob = -1; }
+static void on_release(ZcUI *ui) {
+  if (ui->drag_knob >= 0) zc_touch(ui, KNOBS[ui->drag_knob].port, false);
+  ui->drag_knob = -1;
+}
 
 /* hover feedback while the settings overlay is open (highlight segment / close-X) */
 
@@ -301,6 +324,7 @@ instantiate(const LV2UI_Descriptor *d, const char *uri, const char *bundle,
   for (int i = 0; features && features[i]; i++) {
     if (!strcmp(features[i]->URI, LV2_UI__parent)) parent = (PuglNativeView)(uintptr_t)features[i]->data;
     else if (!strcmp(features[i]->URI, LV2_UI__resize)) ui->resize = (LV2UI_Resize*)features[i]->data;
+    else if (!strcmp(features[i]->URI, LV2_UI__touch)) ui->touch = (LV2UI_Touch*)features[i]->data;
   }
 
   ui->world = puglNewWorld(PUGL_MODULE, 0);
@@ -355,7 +379,8 @@ static int ui_idle(LV2UI_Handle h) {
   /* animate POWER / EQ engage<->bypass toward their targets (0.2s, framerate-independent) */
   { double now = puglGetTime(ui->world);
     double dt = now - ui->last_t; ui->last_t = now;
-    if (dt < 0) dt = 0; if (dt > 0.1) dt = 0.1;
+    if (dt < 0) dt = 0;
+    if (dt > 0.1) dt = 0.1;
     const int ports[2] = { P_POWER, P_EQ_ON };
     for (int i = 0; i < 2; i++) {
       double tgt = ui->v[ports[i]] > 0.5f ? 1.0 : 0.0;
@@ -382,18 +407,22 @@ static int ui_idle(LV2UI_Handle h) {
   return 0;
 }
 
-/* the host notifies us of a new window size (user resize) */
-static int ui_resize_cb(LV2UI_Feature_Handle handle, int width, int height) {
-  ZcUI *ui = (ZcUI*)handle;
-  ui->win_w = width; ui->win_h = height; recompute_scale(ui); redraw(ui);
-  return 0;
-}
-
+/* NOTE ON LV2_UI__resize, which this deliberately does NOT export.
+ *
+ * The host-calls-us direction of that extension is unusable here, and was a crash. extension_data
+ * is a plain lookup with no instance argument, so the LV2UI_Resize it returns has to be a static
+ * whose `handle` cannot point at any particular UI -- it was { NULL, ui_resize_cb }, and hosts
+ * (Ardour and jalv both do this) call it as resize->ui_resize(resize->handle, w, h). The callback
+ * dereferenced that NULL on its first line.
+ *
+ * There is no way to fix it while keeping the extension: the handle simply is not available at
+ * lookup time. Removing it costs nothing, because Pugl already delivers PUGL_CONFIGURE for every
+ * size change, which is where the UI actually learns its dimensions. The OTHER direction --
+ * ui->resize, the feature the host passes to instantiate so we can ask IT to resize us -- is
+ * untouched and still works. */
 static const void *extension_data(const char *uri) {
   static const LV2UI_Idle_Interface idle = { ui_idle };
-  static const LV2UI_Resize resize = { NULL, ui_resize_cb };
   if (!strcmp(uri, LV2_UI__idleInterface)) return &idle;
-  if (!strcmp(uri, LV2_UI__resize))        return &resize;
   return NULL;
 }
 

@@ -57,7 +57,7 @@ typedef struct {
  * The box is deliberately the UNION of every label width ("DRIVE" = 29.8 px at 1x, "DRIVE 4x" =
  * 46.4 px) instead of tracking the current text: the click target must not jump around when the
  * OS changes. Measured at 11px/ZF_LABEL/ls=1.2 -> 50 covers the widest with room to spare.
- * ⚠ It ends where title_rect() begins: see the note there, the two boxes are neighbours. */
+ * It ends where title_rect() begins: the two boxes are neighbours, see the note there. */
 #define DRV_LBL_GAP 12.0
 #define DRV_LBL_R   (DRV_CX - DRV_R - DRV_LBL_GAP)   /* right edge of the label = 180 */
 #define DRV_LBL_W   50.0
@@ -112,15 +112,15 @@ static inline void zc_setface(cairo_t *cr, ZcFontId f, int bold) {
   if ((unsigned)f < ZF_COUNT && zc_face[f]) cairo_set_font_face(cr, zc_face[f]);
   else cairo_select_font_face(cr, ZC_FONT, CAIRO_FONT_SLANT_NORMAL,
                               bold ? CAIRO_FONT_WEIGHT_BOLD : CAIRO_FONT_WEIGHT_NORMAL);
-  /* ⚠ HINT_METRICS OFF — no es cosmetica, arregla el espaciado de letras.
-   * Por defecto cairo REDONDEA cada x_advance a un ENTERO de pixel. A 11px eso destroza el
-   * espaciado con letter-spacing: medido en "DRIVE", los avances reales son
+  /* HINT_METRICS OFF -- not cosmetic, it fixes letter spacing.
+   * By default cairo ROUNDS every x_advance to a WHOLE pixel. At 11px that wrecks the spacing
+   * once letter-spacing is applied: measured on "DRIVE", the real advances are
    *   D=5.192 R=5.071 I=2.464 V=5.181 E=4.785
-   * y el hinting los aplasta a 6,6,3,5,5 => infla la D +0.81 px y la R +0.93, pero ENCOGE la V
-   * -0.18. El resultado se lee "D RIVE": el hueco D-R medido era 2.33 px contra 2.00 del I-V.
-   * Con las metricas sin hintear los avances son fraccionarios y el espaciado sale parejo.
-   * Ademas el panel ESCALA con la ventana: hintear metricas a enteros del espacio LOGICO es
-   * incorrecto de todas formas cuando la escala no es 1:1. */
+   * and hinting flattens them to 6,6,3,5,5 => it inflates the D by +0.81 px and the R by +0.93,
+   * but SHRINKS the V by -0.18. The result reads "D RIVE": the measured D-R gap was 2.33 px
+   * against 2.00 for I-V. With unhinted metrics the advances are fractional and the spacing comes
+   * out even. On top of that the panel SCALES with the window, so hinting metrics to integers of
+   * the LOGICAL space is wrong anyway whenever the scale is not 1:1. */
   cairo_font_options_t *fo = cairo_font_options_create();
   cairo_get_font_options(cr, fo);
   cairo_font_options_set_hint_metrics(fo, CAIRO_HINT_METRICS_OFF);
@@ -665,13 +665,12 @@ static void zc_draw_settings(cairo_t *cr, const float *v, int hover_seg, int hov
  * Family pattern (from DynaSolidComp): clicking "DYNAMO 0C" toggles engage/bypass. Engaged =
  * accent + glow, bypassed = flat white and the whole panel dims.
  * The hit box is SHARED by the draw code and ui.c's hit-test so they can never desync.
- * ⚠ WIDTH: this box and drive_label_rect() are NEIGHBOURS in the header, and on_press tests the
- * title FIRST -- so any overlap silently steals the label's clicks and toggles bypass instead of
- * opening the card. Measured: the brand text "DYNAMO 0C" is 92.8 px at 18px/ZF_BRAND/ls=0.6 drawn
- * from x=14, so it ENDS at ~107. The old w=138 (x1=150) was ~43 px of dead padding that was never
- * title, and it left the label a 0.2 px clearance -- luck, not headroom. w=100 (x1=112) keeps every
- * pixel of the text plus ~5 px of pad, and hands the slack to the label, which needs it for the
- * "DRIVE 4x" form. Do not widen it past drive_label_rect()'s left edge (130). */
+ * WIDTH: this box and drive_label_rect() are NEIGHBOURS in the header, and on_press tests the
+ * title FIRST, so any overlap steals the label's clicks and toggles bypass instead of opening the
+ * card. The brand text "DYNAMO 0C" measures 92.8 px at 18px/ZF_BRAND/ls=0.6 drawn from x=14, so it
+ * ends at about 107. w=100 (x1=112) covers every pixel of the text plus about 5 px of padding and
+ * hands the slack to the label, which needs it for the "DRIVE 4x" form. Do not widen it past
+ * drive_label_rect()'s left edge at 130. */
 static inline void title_rect(double *x, double *y, double *w, double *h) {
   *x = 12.0; *y = 15.0; *w = 100.0; *h = 23.0;
 }

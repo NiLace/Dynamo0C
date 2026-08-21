@@ -39,7 +39,9 @@ int main(int argc, char **argv) {
   /* sample read-out on the HIGH GAIN (knob index 1) */
   ZcHit hits[2]; int nhits = 0;
   int card = (argc > 4 && !strcmp(argv[4], "settings"));   /* render with the OS card open */
-  if (card) v[P_DRIVE_OS] = 1.0f;   /* 2x: shows the card's highlight AND the "DRIVE 2x" label */
+  /* The factory default, so the screenshot shows the setting the plugin actually ships with:
+   * it drives both the card's highlight and the "DRIVE 4x" label in the header. */
+  if (card) v[P_DRIVE_OS] = (float)ZC_DRIVE_OS_DEFAULT;
   zc_backdrop(cr, CW, CH);
   cairo_translate(cr, UI_MARGIN, UI_MARGIN);
   zc_shadow(cr);

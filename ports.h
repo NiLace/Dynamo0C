@@ -54,4 +54,10 @@ typedef enum {
   ZC_N_PORTS  = 25
 } PortIndex;
 
+/* Factory default for P_DRIVE_OS: 4x, the only setting that meets the aliasing criterion.
+ * The TTL declares the same value, and `make lv2check` fails if the two disagree -- a default
+ * written in two places that drift is how a screenshot or a preview ends up showing a setting the
+ * plugin does not ship with. */
+#define ZC_DRIVE_OS_DEFAULT 2
+
 #endif /* ZC_PORTS_H */

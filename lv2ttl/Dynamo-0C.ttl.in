@@ -24,7 +24,7 @@
 		foaf:homepage <https://github.com/NiLace> ;
 		foaf:mbox <mailto:nilace@nylarea.com>
 	] ;
-	lv2:minorVersion 6 ; lv2:microVersion 0 ;
+	lv2:minorVersion 8 ; lv2:microVersion 0 ;
 	@ZC_UI@
 	lv2:optionalFeature lv2:hardRTCapable ;
 
@@ -57,11 +57,13 @@
 	] , [
 		a lv2:InputPort , lv2:ControlPort ; lv2:index 6 ;
 		lv2:symbol "hi_freq" ; lv2:name "High Freq" ;
-		lv2:default 0.5 ; lv2:minimum 0.0 ; lv2:maximum 1.0
+		lv2:default 0.5 ; lv2:minimum 0.0 ; lv2:maximum 1.0 ;
+		rdfs:comment "Frequency of the HIGH band. The port is the knob POSITION (0..1), not a frequency: it drives the potentiometer of the analogue prototype, so the mapping is the circuit's and is not linear. End to end it covers about 1.8 kHz to 13 kHz."
 	] , [
 		a lv2:InputPort , lv2:ControlPort ; lv2:index 7 ;
 		lv2:symbol "hi_gain" ; lv2:name "High Gain" ;
-		lv2:default 0.5 ; lv2:minimum 0.0 ; lv2:maximum 1.0
+		lv2:default 0.5 ; lv2:minimum 0.0 ; lv2:maximum 1.0 ;
+		rdfs:comment "Cut/boost of the HIGH band, as knob position (0..1). 0.5 is flat; the travel is about -10 dB to +10 dB. Not declared in units:db because the port is a position, not a gain."
 	] , [
 		a lv2:InputPort , lv2:ControlPort ; lv2:index 8 ;
 		lv2:symbol "hf_shelf" ; lv2:name "High Bell/Shelf" ;
@@ -71,27 +73,33 @@
 	] , [
 		a lv2:InputPort , lv2:ControlPort ; lv2:index 9 ;
 		lv2:symbol "himid_freq" ; lv2:name "Hi-Mid Freq" ;
-		lv2:default 0.5 ; lv2:minimum 0.0 ; lv2:maximum 1.0
+		lv2:default 0.5 ; lv2:minimum 0.0 ; lv2:maximum 1.0 ;
+		rdfs:comment "Frequency of the HIGH-MID band, as knob position (0..1). Covers about 450 Hz to 4 kHz."
 	] , [
 		a lv2:InputPort , lv2:ControlPort ; lv2:index 10 ;
 		lv2:symbol "himid_gain" ; lv2:name "Hi-Mid Gain" ;
-		lv2:default 0.5 ; lv2:minimum 0.0 ; lv2:maximum 1.0
+		lv2:default 0.5 ; lv2:minimum 0.0 ; lv2:maximum 1.0 ;
+		rdfs:comment "Cut/boost of the HIGH-MID band, as knob position (0..1). 0.5 is flat; about -10 dB to +10 dB."
 	] , [
 		a lv2:InputPort , lv2:ControlPort ; lv2:index 11 ;
 		lv2:symbol "lomid_freq" ; lv2:name "Lo-Mid Freq" ;
-		lv2:default 0.5 ; lv2:minimum 0.0 ; lv2:maximum 1.0
+		lv2:default 0.5 ; lv2:minimum 0.0 ; lv2:maximum 1.0 ;
+		rdfs:comment "Frequency of the LOW-MID band, as knob position (0..1). Covers about 200 Hz to 3.1 kHz."
 	] , [
 		a lv2:InputPort , lv2:ControlPort ; lv2:index 12 ;
 		lv2:symbol "lomid_gain" ; lv2:name "Lo-Mid Gain" ;
-		lv2:default 0.5 ; lv2:minimum 0.0 ; lv2:maximum 1.0
+		lv2:default 0.5 ; lv2:minimum 0.0 ; lv2:maximum 1.0 ;
+		rdfs:comment "Cut/boost of the LOW-MID band, as knob position (0..1). 0.5 is flat; about -10 dB to +10 dB."
 	] , [
 		a lv2:InputPort , lv2:ControlPort ; lv2:index 13 ;
 		lv2:symbol "lo_freq" ; lv2:name "Low Freq" ;
-		lv2:default 0.5 ; lv2:minimum 0.0 ; lv2:maximum 1.0
+		lv2:default 0.5 ; lv2:minimum 0.0 ; lv2:maximum 1.0 ;
+		rdfs:comment "Frequency of the LOW band, as knob position (0..1). Covers about 40 Hz to 450 Hz."
 	] , [
 		a lv2:InputPort , lv2:ControlPort ; lv2:index 14 ;
 		lv2:symbol "lo_gain" ; lv2:name "Low Gain" ;
-		lv2:default 0.5 ; lv2:minimum 0.0 ; lv2:maximum 1.0
+		lv2:default 0.5 ; lv2:minimum 0.0 ; lv2:maximum 1.0 ;
+		rdfs:comment "Cut/boost of the LOW band, as knob position (0..1). 0.5 is flat; about -10 dB to +10 dB."
 	] , [
 		a lv2:InputPort , lv2:ControlPort ; lv2:index 15 ;
 		lv2:symbol "lf_shelf" ; lv2:name "Low Bell/Shelf" ;
@@ -101,7 +109,8 @@
 	] , [
 		a lv2:InputPort , lv2:ControlPort ; lv2:index 16 ;
 		lv2:symbol "hp_freq" ; lv2:name "HP Freq" ;
-		lv2:default 0.0 ; lv2:minimum 0.0 ; lv2:maximum 1.0
+		lv2:default 0.0 ; lv2:minimum 0.0 ; lv2:maximum 1.0 ;
+		rdfs:comment "High-pass corner, as knob position (0..1). Covers 31.6 Hz to 4170.8 Hz (the DSP's own table, coeffs.h ZC_HP_HZ). Only in circuit when hp_on is 1."
 	] , [
 		a lv2:InputPort , lv2:ControlPort ; lv2:index 17 ;
 		lv2:symbol "hp_on" ; lv2:name "HP Enable" ;
@@ -110,7 +119,8 @@
 	] , [
 		a lv2:InputPort , lv2:ControlPort ; lv2:index 18 ;
 		lv2:symbol "lp_freq" ; lv2:name "LP Freq" ;
-		lv2:default 1.0 ; lv2:minimum 0.0 ; lv2:maximum 1.0
+		lv2:default 1.0 ; lv2:minimum 0.0 ; lv2:maximum 1.0 ;
+		rdfs:comment "Low-pass corner, as knob position (0..1). Covers 133.0 Hz to 17711.6 Hz (coeffs.h ZC_LP_HZ). Only in circuit when lp_on is 1."
 	] , [
 		a lv2:InputPort , lv2:ControlPort ; lv2:index 19 ;
 		lv2:symbol "lp_on" ; lv2:name "LP Enable" ;
@@ -127,7 +137,9 @@
 		lv2:symbol "latency" ; lv2:name "Latency" ;
 		lv2:minimum 0 ; lv2:maximum 256 ;
 		lv2:designation lv2:latency ;
-		lv2:portProperty lv2:reportsLatency , lv2:integer
+		units:unit units:frame ;
+		lv2:portProperty lv2:reportsLatency ;
+		rdfs:comment "Samples of latency the drive oversampling adds, and only while the drive is engaged (0 otherwise). The value is FRACTIONAL -- 7.25 at 2x and 16.93 at 4x -- because the FIR round trip has an even tap count and the ADAA shaper adds half a sample at the oversampled rate. That is why this port is not declared lv2:integer: a host that needs an integer can round it, but the plugin does not claim the value is one." 
 	] , [
 		a lv2:InputPort , lv2:ControlPort ; lv2:index 22 ;
 		lv2:symbol "hp_bump" ; lv2:name "HP Bump" ;
@@ -142,10 +154,10 @@
 	] , [
 		a lv2:InputPort , lv2:ControlPort ; lv2:index 24 ;
 		lv2:symbol "drive_os" ; lv2:name "Drive Oversampling" ;
-		lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 2 ;
+		lv2:default 2 ; lv2:minimum 0 ; lv2:maximum 2 ;
 		lv2:portProperty lv2:integer , lv2:enumeration ;
 		lv2:scalePoint [ rdfs:label "1x" ; rdf:value 0 ] ,
 		               [ rdfs:label "2x" ; rdf:value 1 ] ,
 		               [ rdfs:label "4x" ; rdf:value 2 ] ;
-		rdfs:comment "Anti-aliases the (non-linear) drive shaper. 1x = bit-identical to the bare drive (0 latency). 2x/4x add a small FIR round-trip latency, but only while the drive is engaged."
+		rdfs:comment "Anti-aliases the (non-linear) drive shaper, and only while the drive is engaged. 1x is bit-identical to the bare drive and adds no latency, but it aliases audibly on bright material at high drive (ANMR +13.29 dB). 2x is an ECONOMY setting: 7.25 samples of latency, about a third of the CPU, and it does NOT meet the criterion on hard material (-2.24 dB). 4x is the DEFAULT and the only setting that meets the criterion of ANMR below -10 dB on the worst frame: a 31-tap half-band filter with a short half-band inside the cascade, plus antiderivative anti-aliasing, scoring -17.84 dB for 16.93 samples of latency. None of this is paid until the drive knob is moved off zero."
 	] .

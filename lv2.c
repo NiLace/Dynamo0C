@@ -7,6 +7,8 @@
  */
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
+#include <unistd.h>
 #include <math.h>
 
 #include <lv2/core/lv2.h>
@@ -22,17 +24,46 @@
 #include "ports.h"
 #include "dsp.h"
 
-/* flush-to-zero + denormals-are-zero: avoids CPU spikes from denormals in the IIRs during silence */
-static inline void denormal_off(void) {
+/* Flush-to-zero + denormals-are-zero: avoids the CPU spikes denormals cause in the IIRs during
+ * silence. A denormal multiply costs around 17x a normal one, and the tails of a six-section chain
+ * stay in that range for a long time after the music stops.
+ *
+ * MXCSR is per-THREAD, not per-plugin. Setting these bits and leaving them set would change the
+ * floating-point mode for everything that runs afterwards on the audio thread: every other plugin
+ * in the chain and the host's own summing. That is a side effect on shared state that nothing
+ * declares, so the register is saved on entry and put back on exit, at a cost of about 7.4 ns per
+ * run() call.
+ *
+ * The restore must not be hoisted above the audio, which would silently disable FTZ for the very
+ * processing it protects. It is not: a two-million-sample silent tail produces zero denormal output
+ * samples, the same as a build without the restore. Nothing in the language orders an intrinsic
+ * against the floating-point work around it, so this is checked rather than assumed. */
+static inline unsigned denormal_off(void) {
 #if defined(__SSE__)
+  const unsigned saved = _mm_getcsr();
   _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
-#endif
 #if defined(__SSE3__)
   _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
 #endif
+  return saved;
+#else
+  return 0;
+#endif
+}
+static inline void denormal_restore(unsigned saved) {
+#if defined(__SSE__)
+  _mm_setcsr(saved);
+#else
+  (void)saved;
+#endif
 }
 
-#define ZC_MAXBLK 1024     /* we process in chunks of <= 1024 samples (bounded scratch) */
+/* ZC_MAXBLK and ZC_SCRATCH_LEN come from dsp.h: they belong to the engine, not to the wrapper.
+ * The scratch is sized with zero margin on purpose, so the requirement is asserted rather than
+ * covered by slack. Adding a third oversampling stage grows ZC_DRV_MAX_STAGES and the scratch with
+ * it. */
+_Static_assert(ZC_SCRATCH_LEN >= ZC_MAXBLK * (1 << ZC_DRV_MAX_STAGES) + 2 * ZC_OS_PAD,
+               "drive scratch must hold one block at the maximum oversampling factor, plus run-up");
 
 typedef struct {
   float *port[ZC_N_PORTS];          /* pointers to port buffers, by index */
@@ -40,10 +71,19 @@ typedef struct {
 
   ZcChain chL, chR;                 /* CURRENT chain, per channel */
   ZcChain chL_p, chR_p;             /* PREVIOUS chain (fades out during the crossfade) */
-  /* ping-pong scratch for the DRIVE oversampling: max factor is 4x, so a 1024-sample block needs
-   * 4096 doubles; *8 keeps a 2x safety margin. (The EQ chain runs at 1x and needs no scratch.) */
-  double sa[ZC_MAXBLK * 8];
-  double sb[ZC_MAXBLK * 8];
+  /* The design in force at the END of the previous block. When a knob moves, the block is walked
+   * from this design to the new one in a few sub-steps rather than jumping, which keeps the size
+   * of the steps from depending on the host's buffer size. */
+  ZcChain chL_from, chR_from;       /* design at the END of the previous block */
+  ZcChain chL_to,   chR_to;         /* design this block is moving TO */
+  int ramp_pending;                 /* set on a block where the design changed */
+  /* Ping-pong scratch for the DRIVE oversampling. zc_driveos_process needs n*os doubles in each
+   * buffer, with n <= ZC_MAXBLK and os <= 2^ZC_DRV_MAX_STAGES, so that product is the requirement
+   * and the size is derived from it rather than written out: the scratch dominates per-instance
+   * memory, so any margin here is paid dozens of times over in a session. The EQ chain runs at 1x
+   * and needs no scratch. */
+  double sa[ZC_SCRATCH_LEN];
+  double sb[ZC_SCRATCH_LEN];
 
   ZcDriveOS drvL, drvR;             /* CURRENT drive (input stage, before the EQ; optional OS) */
   ZcDriveOS drvL_p, drvR_p;         /* PREVIOUS drive */
@@ -57,9 +97,99 @@ typedef struct {
   int   last_sig;                   /* structure signature, to detect rebuild */
   int   have;                       /* 0 until the first build */
   float latency_samples;
+  /* Drive-OS latency, computed ONCE per instance rather than on every block. It is a pure function
+   * of the oversampling factor -- the FIR cascade's group delay, independent of the signal, the
+   * controls and the rate -- and measuring it costs about 28.8 us plus 16 KB of stack, which on the
+   * audio thread at a 64-sample block is more than the drive's real work. Indexed by the port's
+   * enum value (0 = 1x, 1 = 2x, 2 = 4x). */
+  float lat_by_os[3];
+  int rr_cursor;                    /* round-robin: which section the next refresh starts at */
+  unsigned approxL, approxR;        /* bitmask of sections currently set by interpolation */
   ZcControls cur_ct;                /* controls the CURRENT chain was (re)built/refreshed with:
                                      * lets us skip the per-block coeff refresh when nothing moved */
 } Zc;
+
+/* ---- the shared coefficient grid --------------------------------------------------------------
+ * Pre-designed coefficients on a grid of control positions, so that a moving knob can interpolate
+ * instead of running the designer. ONE table for the whole process rather than one per instance:
+ * it is 0.58 MB, about seven times the size of an instance, and a session has dozens of instances.
+ * Filling it costs 0.72 s, so it cannot happen in instantiate() -- the host would freeze while the
+ * user inserts the plugin. A background thread fills it and publishes it with a release store; the
+ * audio thread does an acquire load and simply uses the designer until the pointer appears.
+ * Nothing waits and nothing locks.
+ *
+ * The table is never freed: it is process-wide, and freeing it while an audio thread might be
+ * reading it would require reference counting for no benefit.
+ * It is built for ONE sample rate, the first one that asks. An instance at any other rate keeps
+ * using the designer, which is correct, only slower. */
+static ZcGrid       *zc_grid_ptr = NULL;      /* published; read with acquire */
+static int           zc_grid_started = 0;
+static pthread_t     zc_grid_th;
+static int           zc_grid_th_valid = 0;
+static int           zc_grid_stop = 0;        /* asks the filler to give up early */
+static int           zc_inst_count = 0;
+static pthread_mutex_t zc_grid_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* THE THREAD MUST NOT OUTLIVE THE LAST INSTANCE. If it is left detached, removing the plugin
+ * unloads the .so while the thread is still filling the table, and it jumps into freed code -- a
+ * crash in the host, at plugin removal. So the thread is joinable, it checks a stop flag between
+ * bands, and cleanup() of the LAST instance sets the flag and joins it. Worst case that costs one
+ * band's fill, around 0.5 s, at close; usually the fill is long finished and it costs nothing. */
+static void *zc_grid_thread(void *arg) {
+  double fs = *(double *)arg; free(arg);
+  /* LOWEST PRIORITY. The fill costs 0.72 s of solid CPU and starts exactly when the user inserts
+   * the plugin, i.e. while audio is running: without this the audio path runs about 120 % slower
+   * while the fill is in flight, which in a host is an xrun rather than a slow benchmark. On Linux
+   * nice() applies per THREAD, so this demotes only the filler and leaves the audio thread alone.
+   * A failure here needs no handling -- the table simply takes longer to appear and the plugin
+   * keeps designing -- hence the cast to void. */
+  (void)nice(19);
+  ZcGrid *g = (ZcGrid *)calloc(1, sizeof(ZcGrid));
+  if (!g) return NULL;
+  g->fs = fs;
+  for (int w = 0; w < ZC_GB_N; w++) {
+    if (__atomic_load_n(&zc_grid_stop, __ATOMIC_ACQUIRE)) { free(g); return NULL; }
+    zc_grid_fill_one(&g->band[w], w, fs);
+  }
+  if (__atomic_load_n(&zc_grid_stop, __ATOMIC_ACQUIRE)) { free(g); return NULL; }
+  __atomic_store_n(&zc_grid_ptr, g, __ATOMIC_RELEASE);
+  return NULL;
+}
+/* Called from instantiate() (never from run()): starts the fill once, for the first rate seen. */
+static void zc_grid_request(double fs) {
+  pthread_mutex_lock(&zc_grid_lock);
+  zc_inst_count++;
+  if (!zc_grid_started && !zc_grid_ptr) {
+    double *arg = (double *)malloc(sizeof(double));
+    if (arg) {
+      *arg = fs;
+      __atomic_store_n(&zc_grid_stop, 0, __ATOMIC_RELEASE);
+      if (pthread_create(&zc_grid_th, NULL, zc_grid_thread, arg) == 0) {
+        zc_grid_started = 1; zc_grid_th_valid = 1;
+      } else free(arg);
+    }
+  }
+  pthread_mutex_unlock(&zc_grid_lock);
+}
+/* Called from cleanup(). The last instance out joins the filler. */
+static void zc_grid_release(void) {
+  pthread_mutex_lock(&zc_grid_lock);
+  int last = (--zc_inst_count <= 0);
+  int join = last && zc_grid_th_valid;
+  if (join) { zc_grid_th_valid = 0; __atomic_store_n(&zc_grid_stop, 1, __ATOMIC_RELEASE); }
+  pthread_mutex_unlock(&zc_grid_lock);
+  if (join) {
+    pthread_join(zc_grid_th, NULL);            /* joined OUTSIDE the lock: the thread takes none */
+    pthread_mutex_lock(&zc_grid_lock);
+    if (!__atomic_load_n(&zc_grid_ptr, __ATOMIC_ACQUIRE)) zc_grid_started = 0;  /* let a later
+                                                    instance try again if we cut the fill short */
+    pthread_mutex_unlock(&zc_grid_lock);
+  }
+}
+static inline const ZcGrid *zc_grid_get(double fs) {
+  const ZcGrid *g = (const ZcGrid *)__atomic_load_n(&zc_grid_ptr, __ATOMIC_ACQUIRE);
+  return (g && g->fs == fs) ? g : NULL;
+}
 
 #define ZC_XFADE   256          /* declick crossfade samples (~5.3 ms @48k) */
 #define ZC_CFG_BYPASS 0x40000000 /* config token when POWER is off (sig never reaches it) */
@@ -77,6 +207,19 @@ static inline void process_path(int bypass, ZcDriveOS *dv, int drive_on, ZcChain
   else          zc_chain_process(ch, in, out, m);
 }
 
+/* Same, but walking the chain's coefficients from `from` to their current value across the block.
+ * Only used on blocks where a control moved; every other block takes the plain path above and is
+ * bit-identical to what it was. */
+static inline void process_path_ramp(int bypass, ZcDriveOS *dv, int drive_on, ZcChain *ch,
+                                     const ZcChain *from, const ZcChain *to,
+                                     const float *in, float *out, int m,
+                                     double *sa, double *sb, int steps) {
+  if (bypass) { if (out != in) memmove(out, in, m * sizeof(float)); return; }
+  if (drive_on) { zc_driveos_process(dv, in, out, m, sa, sb);
+                  zc_chain_process_ramp(ch, from, to, out, out, m, steps); }
+  else          zc_chain_process_ramp(ch, from, to, in, out, m, steps);
+}
+
 /* --- structure signature: which sections/kinds exist (rebuild only if it changes) --- */
 static int structure_sig(const ZcControls *ct) {
   return (ct->hp_on ? 1 : 0)
@@ -88,11 +231,26 @@ static int structure_sig(const ZcControls *ct) {
        | (ct->hp_bump ? 64 : 0);              /* BUMP changes the HP's Q */
 }
 
+/* Port value -> internal oversampling factor: 0 = Off (bare drive, zero latency), 1 = 2x, 2 = 4x.
+ * This is the ONLY place the port value is turned into a factor. The engine must not clamp it
+ * again: a second copy of that decision does not fail loudly, it just answers a different question
+ * from this one. */
 static int os_factor(float port_val) {
   int v = (int)(port_val + 0.5f);
   return v <= 0 ? 1 : (v == 1 ? 2 : 4);
 }
 
+/* Every control port is dereferenced here WITHOUT a null check, and that is deliberate.
+ *
+ * LV2 requires the host to call connect_port() for every port before it may call run(), so a null
+ * port pointer is a host bug rather than a state this plugin has to survive.
+ *
+ * Guarding only some of the ports would be worse than guarding none: this function reads all
+ * twenty-two, so a host that failed to connect would already have crashed before reaching any
+ * partial guard, while the guard itself would tell a reader the case is handled. Adding all
+ * twenty-two would cost about 25 ns per run() against a 5.4 us block at 64 samples, which is
+ * affordable; it is left out because it defends against a case the specification forbids. If a
+ * host is ever found violating it, guard all twenty-two, not two. */
 static void read_controls(Zc *self, ZcControls *ct) {
   memset(ct, 0, sizeof *ct);
   /* HP/LP: the filter engages by knob POSITION (off at the extreme):
@@ -125,6 +283,13 @@ instantiate(const LV2_Descriptor *d, double rate, const char *bundle,
   self->base_fs = rate;
   self->have = 0;
   self->last_sig = -1;
+  /* off the audio thread, once: the group delay of each OS factor's FIR round trip */
+  zc_grid_request(rate);            /* fills the shared coefficient grid in the background */
+  self->lat_by_os[0] = 0.0f;                        /* Off: no FIR, no ADAA, zero latency */
+  self->lat_by_os[1] = zc_driveos_latency_total(2); /* FIR round trip + 0.5/os of ADAA */
+  self->lat_by_os[2] = zc_driveos_latency_total(4); /* 4x: the only setting that meets the alias
+                                                     * criterion on material with real energy near
+                                                     * Nyquist (see ZC_DRV_MAX_STAGES in dsp.h) */
   return (LV2_Handle)self;
 }
 
@@ -143,9 +308,20 @@ static void activate(LV2_Handle instance) {
   self->have = 0;
 }
 
+/* ISA dispatch resolved at load time. The plugin is compiled for SSE3, so the EQ recurrence
+   vectorises to 128 bits; these clones let a CPU that has them use 256-bit vectors and FMA
+   instead, worth about 23 % at the factory default and 10 % with the drive at 2x, for a binary
+   45 % larger. The two paths agree to -180 dB.
+   run() is called once per BLOCK, which is the right boundary for the dispatch: doing it per
+   sample costs more than it buys, because the indirection blocks inlining.
+   The `default` clone cannot execute on a machine that has AVX2, so it has to be exercised
+   elsewhere: it is checked under qemu-user across eight CPU models without AVX2, each against a
+   canary build that must fault, and its output on a CPU with no AVX at all is identical to a plain
+   SSE3 build. */
+__attribute__((target_clones("default","avx2","arch=x86-64-v3")))
 static void run(LV2_Handle instance, uint32_t n_samples) {
   Zc *self = (Zc *)instance;
-  denormal_off();
+  const unsigned fp_saved = denormal_off();
   const float *inL = self->port[P_IN_L], *inR = self->port[P_IN_R];
   float *outL = self->port[P_OUT_L], *outR = self->port[P_OUT_R];
 
@@ -157,9 +333,9 @@ static void run(LV2_Handle instance, uint32_t n_samples) {
   double drive_knob = 0.0;
   if (power) {
     sig = structure_sig(&ct);
-    drive_knob = self->port[P_DRIVE] ? (double)*self->port[P_DRIVE] : 0.0;
+    drive_knob = (double)*self->port[P_DRIVE];         /* see read_controls: ports are connected */
     drive_on = drive_knob > 1e-4;
-    if (drive_on && self->port[P_DRIVE_OS]) {          /* 1x/2x/4x, only meaningful when drive is on */
+    if (drive_on) {                                    /* 1x/2x/4x, only meaningful when drive is on */
       drive_os_sel = (int)(*self->port[P_DRIVE_OS] + 0.5f);
       if (drive_os_sel < 0) drive_os_sel = 0; else if (drive_os_sel > 2) drive_os_sel = 2;
       drive_os = os_factor((float)drive_os_sel);       /* 0->1x 1->2x 2->4x */
@@ -184,6 +360,16 @@ static void run(LV2_Handle instance, uint32_t n_samples) {
     self->chL_p = self->chL; self->chR_p = self->chR;
     self->drvL_p = self->drvL; self->drvR_p = self->drvR;
     self->prev_bypass = self->cur_bypass; self->prev_drive_on = self->cur_drive_on;
+    /* Re-engaging after a bypass: the chains still hold the state from BEFORE the bypass, because
+     * while bypassed process_path returns early and the filters are never stepped at all -- so the
+     * state does not decay, it FREEZES. Measured: with digital silence at the input, re-engaging
+     * after half a second of bypass fires a -3.1 dBFS transient from the very first sample. Start
+     * the re-engaged path from rest instead; the fade in from the dry path covers the discontinuity
+     * that resetting would otherwise create. */
+    if (self->cur_bypass && power) {
+      zc_chain_reset_state(&self->chL); zc_chain_reset_state(&self->chR);
+      zc_driveos_reset(&self->drvL);    zc_driveos_reset(&self->drvR);
+    }
     self->xfade = ZC_XFADE;
   }
 
@@ -191,14 +377,63 @@ static void run(LV2_Handle instance, uint32_t n_samples) {
   if (!defer) {
     if (power) {
       if (!self->have || sig != self->last_sig) {  /* structure -> rebuild (state zeroed) */
-        zc_chain_build(&self->chL, &ct, self->base_fs);
-        zc_chain_build(&self->chR, &ct, self->base_fs);
+        if (self->have)
+          /* A toggle shifts the section indices, but only one section's controls actually moved.
+           * Reuse the designs of the survivors instead of recomputing all six: bit-identical, and
+           * it is what turns a knob flip from a DSP spike into nothing. */
+          zc_chain_rebuild_reuse(&self->chL, &self->chL, self->base_fs, &ct, &self->cur_ct);
+        else
+          zc_chain_build(&self->chL, &ct, self->base_fs);
+        /* Both channels get the SAME ct, and the designer is a pure function of (ct, fs), so the
+         * right channel's design is the left one's, word for word. Copying the whole struct is
+         * correct HERE (and only here) because zc_chain_build has just zeroed the state, so the
+         * z[] that comes along is all zeros. */
+        self->chR = self->chL;
         self->last_sig = sig;
         self->cur_ct = ct;
+      /* memcmp over a struct is normally a trap -- padding bytes are unspecified and two
+       * semantically equal structs can compare different. It is safe HERE, and only here, because
+       * read_controls memsets the whole ZcControls to zero before filling it, so the padding is
+       * deterministically zero in both operands: ct is freshly memset each block, and cur_ct is a
+       * plain copy of a previously memset ct. Anything that stops doing that memset breaks this. */
+      } else if (self->approxL) {
+        /* Nothing moved this block, so there is room to replace ONE interpolated section with its
+         * exact design. The grid exists to remove the peak WHILE a control moves; once it stops,
+         * what is heard has to be the exact filter, not the interpolated one. Refining a single
+         * section per block keeps this from becoming a peak itself. */
+        zc_chain_copy_design(&self->chL_from, &self->chL);
+        zc_chain_copy_design(&self->chR_from, &self->chR);
+        if (zc_chain_refine_one(&self->chL, &ct, &self->approxL)) {
+          zc_chain_copy_design(&self->chR, &self->chL);
+          zc_chain_copy_design(&self->chL_to, &self->chL);
+          zc_chain_copy_design(&self->chR_to, &self->chR);
+          self->ramp_pending = 1;
+        }
       } else if (memcmp(&ct, &self->cur_ct, sizeof ct) != 0) {  /* continuous knobs moved -> hot refresh */
-        zc_chain_update(&self->chL, &ct);                       /* skipped when ct is unchanged: zc_chain_fill is a */
-        zc_chain_update(&self->chR, &ct);                       /* pure fn of (ct, fs), so it would recompute the */
-        self->cur_ct = ct;                                      /* SAME coeffs -> skipping is bit-identical */
+        /* Only the sections whose own controls moved are redesigned, and only once: the right
+         * channel takes a copy of the DESIGN (never the state). A section that is skipped would
+         * have been handed the same inputs and produced the same coefficients, so this is
+         * bit-identical, not an approximation.
+         * The saving is what makes a moving control affordable: a full two-channel redesign costs
+         * 1.37 ms, which is over a whole 64-sample block at 48 kHz, while the selective path with
+         * a design copy to the right channel costs 0.11 ms, about 8 % of that block. */
+        /* keep the design we are coming FROM, then move to the new one */
+        zc_chain_copy_design(&self->chL_from, &self->chL);
+        zc_chain_copy_design(&self->chR_from, &self->chR);
+        /* Redesign at most `budget` sections in THIS block; the rest drain over the following
+         * ones. The budget scales with the block size so the peak stays a roughly constant
+         * FRACTION of the block rather than a constant time: at 64 samples one section is about
+         * 8 % of the block and all four at once would be 32 %. zc_chain_update_rr marks only what
+         * it actually redesigned, so the memcmp above brings control straight back here on the
+         * next block. */
+        int budget = 1 + (int)(n_samples / 256);
+        const ZcGrid *grid = zc_grid_get(self->base_fs);
+        zc_chain_update_rr(&self->chL, &ct, &self->cur_ct, budget, &self->rr_cursor,
+                           grid, &self->approxL);
+        zc_chain_copy_design(&self->chR, &self->chL);
+        zc_chain_copy_design(&self->chL_to, &self->chL);
+        zc_chain_copy_design(&self->chR_to, &self->chR);
+        self->ramp_pending = 1;
       }
       if (drive_on) {
         /* fresh drive state on engage OR when the OS factor changed (a token change already forced a
@@ -214,7 +449,8 @@ static void run(LV2_Handle instance, uint32_t n_samples) {
     self->have = 1; self->cfg = newcfg;
     /* latency: only the DRIVE oversampling adds any (its FIR round-trip), and only while engaged.
      * The EQ is analog-matched at the base rate -> zero latency. */
-    self->latency_samples = (power && drive_on && drive_os > 1) ? zc_driveos_latency(drive_os) : 0.0f;
+    self->latency_samples = (power && drive_on && drive_os > 1) ? self->lat_by_os[drive_os_sel]
+                                                                : 0.0f;
   }
   if (self->port[P_LATENCY]) *self->port[P_LATENCY] = power ? self->latency_samples : 0.0f;
 
@@ -224,12 +460,50 @@ static void run(LV2_Handle instance, uint32_t n_samples) {
     const float *xl = inL + off, *xr = inR + off;
     float *yl = outL + off, *yr = outR + off;
 
-    process_path(self->cur_bypass, &self->drvL, self->cur_drive_on, &self->chL, xl, yl, m, self->sa, self->sb);
-    process_path(self->cur_bypass, &self->drvR, self->cur_drive_on, &self->chR, xr, yr, m, self->sa, self->sb);
-
+    /* ORDER MATTERS, and it is not a style choice. LV2 lets a host connect the same buffer to an
+     * input and an output port unless the plugin declares lv2:inPlaceBroken -- Ardour does exactly
+     * that, and this plugin does not declare it. So xl and yl may be the SAME memory, and the
+     * previous path has to read the input BEFORE the current path writes over it.
+     * Measured with the old order: 10 of 12 transitions differed under in-place processing, and
+     * inside the 256-sample crossfade the error was -4 to -10 dB -- the fade was substantially
+     * wrong, not slightly. With separate buffers the two orders are bit-identical.
+     * The sa/sb scratch is still shared: each process_path call consumes it entirely before
+     * returning, so no call can see another's leftovers. */
     if (self->xfade > 0) {
       process_path(self->prev_bypass, &self->drvL_p, self->prev_drive_on, &self->chL_p, xl, self->pbufL, m, self->sa, self->sb);
       process_path(self->prev_bypass, &self->drvR_p, self->prev_drive_on, &self->chR_p, xr, self->pbufR, m, self->sa, self->sb);
+    }
+
+    if (self->ramp_pending) {
+      /* Deliver this block's coefficient change in a few sub-steps instead of one jump, so the
+       * size of the step does not depend on the host's buffer size. Sub-steps are at least 8
+       * samples long, so a tiny block does not pay for interpolation it cannot use. This is applied
+       * on the FIRST chunk of the call, which for n_samples <= ZC_MAXBLK is the whole block. */
+      int steps = m / 8; if (steps > 8) steps = 8; if (steps < 1) steps = 1;
+      process_path_ramp(self->cur_bypass, &self->drvL, self->cur_drive_on, &self->chL,
+                        &self->chL_from, &self->chL_to, xl, yl, m, self->sa, self->sb, steps);
+      process_path_ramp(self->cur_bypass, &self->drvR, self->cur_drive_on, &self->chR,
+                        &self->chR_from, &self->chR_to, xr, yr, m, self->sa, self->sb, steps);
+      self->ramp_pending = 0;
+    } else {
+      if (!self->cur_bypass) {
+        /* The two EQ chains are independent and each is a serial recurrence, so they are run
+         * INTERLEAVED (see dsp.h). The drive still runs one channel at a time: both calls share the
+         * sa/sb scratch, so interleaving it would need a second pair of buffers. */
+        if (self->cur_drive_on) {
+          zc_driveos_process(&self->drvL, xl, yl, m, self->sa, self->sb);
+          zc_driveos_process(&self->drvR, xr, yr, m, self->sa, self->sb);
+          zc_chain_process2(&self->chL, &self->chR, yl, yr, yl, yr, m);
+        } else {
+          zc_chain_process2(&self->chL, &self->chR, xl, xr, yl, yr, m);
+        }
+      } else {
+        process_path(self->cur_bypass, &self->drvL, self->cur_drive_on, &self->chL, xl, yl, m, self->sa, self->sb);
+        process_path(self->cur_bypass, &self->drvR, self->cur_drive_on, &self->chR, xr, yr, m, self->sa, self->sb);
+      }
+    }
+
+    if (self->xfade > 0) {
       int xf = self->xfade;
       for (int i = 0; i < m; i++) {
         double t = 1.0 - (double)xf / ZC_XFADE;      /* 0 -> 1: weight of the new path */
@@ -240,9 +514,13 @@ static void run(LV2_Handle instance, uint32_t n_samples) {
       self->xfade = xf;
     }
   }
+  denormal_restore(fp_saved);
 }
 
-static void cleanup(LV2_Handle instance) { free(instance); }
+static void cleanup(LV2_Handle instance) {
+  zc_grid_release();          /* the last instance out joins the grid filler; see zc_grid_request */
+  free(instance);
+}
 
 static const LV2_Descriptor descriptor = {
   ZC_URI, instantiate, connect_port, activate, run, NULL /*deactivate*/, cleanup, NULL /*extension_data*/

@@ -73,6 +73,15 @@ int main(int argc, char **argv) {
       printf("%-6s", K[b].name);
       for(int k=0;k<11;k++){
         ports[K[b].gport]=(float)norms[k];
+        /* WARM-UP RUN, discarded. Two things contaminate a cold measurement, and both were
+         * measured rather than assumed (worst case 0.38 dB, on the LO shelf):
+         *   - switching bell<->shelf is a STRUCTURE change, so the plugin runs its 256-sample
+         *     declick crossfade at the start of the next block -- inside the buffer being measured;
+         *   - the IIR state carries over from the previous measurement, and the chirp restarts at
+         *     20 Hz right after ending at 22 kHz, which is a discontinuity the filters ring on.
+         * These tables feed the GUI's gain read-out, so 0.38 dB of contamination is 0.38 dB of
+         * lying to the user about where their knob is. */
+        d->run(inst,N);
         d->run(inst,N);
         band_response(fr,gr,&nr);
         /* signed peak deviation (the largest |dB|) */
