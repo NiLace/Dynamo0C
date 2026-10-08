@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Copyright (C) The NL Sounds contributors */
 /* ports.h -- port indices for the Dynamo 0C EQ. Single source of truth (included by lv2.c and the UI). */
 #ifndef ZC_PORTS_H
 #define ZC_PORTS_H

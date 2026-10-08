@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Copyright (C) The NL Sounds contributors */
 /* ui_panel.h -- Cairo drawing + layout of the Dynamo 0C EQ panel.
  * PURE module: depends on neither Pugl nor LV2; used by the PNG previewer and the LV2 UI.
  * All control values are norm 0..1 (gain 0.5 = 0 dB). The scales printed around

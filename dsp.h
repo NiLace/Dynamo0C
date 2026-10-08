@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Copyright (C) The NL Sounds contributors */
 /* dsp.h -- DSP core of the equalizer (header-only, C99, no dependencies).
  *
  * WHAT IT DOES

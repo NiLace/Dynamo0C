@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Copyright (C) The NL Sounds contributors */
 /* matched.h -- analog-matched designer (matched-Z + HF-weighted FIR correction) for Dynamo.
  * Replaces the EQ's bilinear+oversampling pair with a closed form that needs NO oversampling:
  *   1. roots of the analogue H(s)=B(s)/A(s)  (Durand-Kerner)

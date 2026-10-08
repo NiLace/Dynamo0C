@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Copyright (C) The NL Sounds contributors */
 /* lv2.c -- Dynamo 0C EQ : LV2 wrapper for the DSP core.
  *
  * Per-channel chain (L/R): optional DRIVE -> HP -> 4 bells (LOW/HI switch bell<->shelf) -> LP. Each

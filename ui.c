@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Copyright (C) The NL Sounds contributors */
 /* ui.c -- Dynamo 0C EQ : LV2 UI (Pugl + Cairo). Single translation unit.
  * Drawing in ui_panel.h (pure module). Here: Pugl window, events, control-port writes. */
 #include <math.h>

@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Copyright (C) The NL Sounds contributors */
 /* host_test.c -- mini-host: dlopen the .so, instantiate, wire up ports, process and check
  * the wrapper's behavior (exact bypass, flat ~unity, real boost). Verification only. */
 #include <stdio.h>

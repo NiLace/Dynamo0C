@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Copyright (C) The NL Sounds contributors */
 /* gain_probe.c -- measures the REAL gain curve (norm -> dB of peak deviation) of each
  * GAIN knob of the plugin, with a chirp + FFT (takes the maximum |dB| deviation with its sign).
  * Output: tables ready to paste into the GUI (exact read-out + honest ticks). */

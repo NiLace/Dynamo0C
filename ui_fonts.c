@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Copyright (C) The NL Sounds contributors */
 /* ui_fonts.c -- implementation of ui_fonts.h. FreeType loads each TTF; cairo-ft wraps the
  * FT_Face in a cairo_font_face_t. The FT_Face must outlive the cairo face (cairo references
  * it, does not copy it), which is why both are kept and freed in reverse order. */

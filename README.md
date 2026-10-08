@@ -181,7 +181,7 @@ Build the DSP only (no interface) with `make BUILDUI=no` / `make install BUILDUI
   License (see `deps/pugl/COPYING`).
 - **Fonts** (`fonts/`) — Oswald, Barlow Condensed and Inter, under the SIL Open
   Font License 1.1 (full text and copyright notices in `fonts/OFL.txt`). They
-  stay under the OFL and are not relicensed under the GPL.
+  stay under the OFL and are not relicensed under the AGPL.
 
 ## How this was made, and the license
 
@@ -196,8 +196,11 @@ but I have not reviewed every line by hand — so please treat it accordingly:
 - **Help is welcome.** If you read code, spot bugs, or want to improve it, review
   and contributions are genuinely appreciated — that's a big part of why it's open.
 
-Released under the **GNU General Public License v3.0 or later** — see
-[`LICENSE`](LICENSE).
+Released under the **GNU Affero General Public License v3.0, that version only** (`AGPL-3.0-only`) — see
+[`LICENSE`](LICENSE). You may use it, study it, modify it and sell it; what nobody may do is close it: any
+version you distribute, or let others use over a network, has to come with its complete source under this same
+licence. The third-party parts listed above keep their own licences. Contributions are welcome — see
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Author
 

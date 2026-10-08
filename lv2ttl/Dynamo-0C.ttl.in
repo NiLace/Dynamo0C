@@ -16,7 +16,7 @@
 <https://github.com/NiLace/Dynamo-0C>
 	a lv2:Plugin , lv2:EQPlugin ;
 	doap:name "Dynamo 0C EQ" ;
-	doap:license <http://usefulinc.com/doap/licenses/gpl> ;
+	doap:license <https://spdx.org/licenses/AGPL-3.0-only> ;
 	doap:homepage <https://github.com/NiLace> ;
 	doap:maintainer [
 		a foaf:Organization ;

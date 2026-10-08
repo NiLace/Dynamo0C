@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Copyright (C) The NL Sounds contributors */
 /* ui_fonts.h -- loading of bundled fonts (FreeType -> cairo-ft) for the Dynamo 0C EQ panel.
  * The cairo faces are exposed via zc_face[]; if they did not load (NULL), ui_panel.h falls back to
  * Cairo's "toy" API (system font). Roles -> files in ui_fonts.c. */

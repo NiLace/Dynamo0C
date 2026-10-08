@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Copyright (C) The NL Sounds contributors */
 /* ui_preview.c -- renders the panel to PNG (no Pugl/host) to iterate on the look.
  *   ./ui_preview out.png [scale] [fontdir] [settings]
  * If the 4th arg is "settings", the Oversampling card is drawn open (the DRIVE-label click state);

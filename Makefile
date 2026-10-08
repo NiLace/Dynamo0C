@@ -1,4 +1,6 @@
 #!/usr/bin/make -f
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) The NL Sounds contributors
 # Dynamo 0C EQ -- LV2 parametric equalizer (4 bands + HP/LP filters), DSP + custom UI.
 
 PREFIX ?= /usr/local

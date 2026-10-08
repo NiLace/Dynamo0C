@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Copyright (C) The NL Sounds contributors */
 /* grid.h -- precomputed coefficient grid + bilinear interpolation.
  *
  * WHAT PROBLEM THIS SOLVES

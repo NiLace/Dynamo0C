@@ -5,7 +5,7 @@ Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter)
 The fonts bundled in this directory are subsets / static instances of the
 families above, prepared for distribution with Dynamo 0C EQ. They remain
 licensed under the SIL Open Font License, Version 1.1, reproduced in full
-below. The fonts are NOT relicensed under the GPL.
+below. The fonts are NOT relicensed under the AGPL.
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:
