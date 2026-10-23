@@ -46,7 +46,7 @@ typedef enum {
   P_HP_BUMP   = 22,  /* HP toggle: 0=clean (Butterworth) 1=resonant (boost ~+1.5 dB at the cutoff) */
 
   /* channel drive (console-style input stage). norm 0..1, 0=bypass (auto-on when the knob moves).
-   * 0.5 = nominal intensity of the reference console; >0.5 pushes harder. Bounded asym. shaper + DC-block. */
+   * 0.5 = the shaper's nominal intensity (pre-gain 1); >0.5 pushes harder. Bounded asym. shaper + DC-block. */
   P_DRIVE     = 23,
 
   /* drive oversampling: suppresses the aliasing of the memoryless shaper. Only engages when the

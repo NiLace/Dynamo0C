@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
 /* Copyright (C) The NL Sounds contributors */
-/* dsp.h -- DSP core of the equalizer (header-only, C99, no dependencies).
+/* dsp.h -- DSP core of the equalizer (header-only; C11 with GCC extensions: vector types, target_clones).
  *
  * WHAT IT DOES
  *   Processes audio through a chain of IIR sections: high-pass filter (HP),
@@ -15,7 +15,7 @@
  *      parameters via interpolation tables ("tapers"), also in coeffs.h.
  *   2. That H(s) is converted to a DIGITAL filter with an ANALOG-MATCHED design (matched.h):
  *      matched-Z of poles+zeros plus an FIR correction that fits the analogue magnitude near
- *      Nyquist WITHOUT cramping. Faithful to the analogue within ~0.3 dB over the whole range, and
+ *      Nyquist WITHOUT cramping. Faithful to the analogue within 0.6 dB over the whole control range, and
  *      always stable (the poles come from the matched-Z denominator of a stable analogue
  *      prototype). The EQ is LINEAR, so it runs at the base rate: one biquad-style section per
  *      band, no oversampling, zero latency.
@@ -31,56 +31,15 @@
 #include <math.h>
 #include <string.h>
 #include <stdint.h>
-/* coeffs.h is a GENERATED file and trips -Wunused-parameter twice: zc_hishelf_coeffs takes Ct and
- * zc_loshelf_coeffs takes Cf, and neither topology uses that capacitor. That is by design, not a
- * defect -- the three coefficient functions share ONE uniform signature so zc_bellshelf_analog
- * below can call any of them through the same line, and each uses the cap it needs.
- *
- * The suppression lives here rather than inside coeffs.h because a regeneration would drop it, and
- * its scope is just this include: warnings stay switched on for the hand-written code, which is
- * what lets these sources build with -Wextra -Werror.
- *
- * Note that compare/provenance.c and compare/eqdata.c include coeffs.h directly and are NOT
- * covered by this; they need the same wrapper if they are ever built with -Wextra. */
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-parameter"
-#include "coeffs.h"
-#pragma GCC diagnostic pop
 
+#include "analog.h"    /* the analogue prototypes H(s), their tables and the pot laws (shared with the UI) */
 #include "matched.h"   /* analog-matched designer (matched-Z + FIR correction); replaces the EQ's bilinear+OS pair */
 
-/* number of elements in a static array (so table lengths aren't hard-coded by hand) */
-#define ZC_ARRLEN(a) ((int)(sizeof(a) / sizeof((a)[0])))
 
-/* high-pass Q per the BUMP button: 0.707 = flat Butterworth (no peak); ZC_HP_Q (~1.0) is a
- * deliberate VOICING choice — a gentle resonant lift (~+1.5 dB) just above the corner. It is
- * hand-set and NOT taken from the schematic: the netlist has no such resonance. Same for
- * ZC_LP_Q_RESONANT on the low-pass. (The README says the same thing to users, under BUMP.) */
-#define ZC_HP_Q_FLAT 0.70710678118654752
 
-/* ----------------------------------------------------------------- interpolation */
-
-/* uniform LUT in norm 0..1 (tapers norm->F / norm->W), ZC_TAP_N points. */
-static inline double zc_lut(const float *tab, double norm) {
-  if (norm <= 0.0) return tab[0];
-  if (norm >= 1.0) return tab[ZC_TAP_N - 1];
-  double x = norm * (ZC_TAP_N - 1);
-  int i = (int)x; double fr = x - i;
-  return tab[i] * (1.0 - fr) + tab[i + 1] * fr;
-}
-
-/* linear interp over an irregular table (norm->Hz for HP/LP). */
-static inline double zc_interp(double xq, const float *xs, const float *ys, int n) {
-  if (xq <= xs[0]) return ys[0];
-  if (xq >= xs[n - 1]) return ys[n - 1];
-  int i = 0; while (i < n - 1 && xs[i + 1] < xq) i++;
-  double fr = (xq - xs[i]) / (xs[i + 1] - xs[i]);
-  return ys[i] * (1.0 - fr) + ys[i + 1] * fr;
-}
 
 /* ----------------------------------------------------------------- sections */
 
-typedef enum { ZC_BELL, ZC_HISHELF, ZC_LOSHELF, ZC_HP, ZC_LP } ZcKind;
 
 /* One section: digital IIR, Direct Form II transposed. The poles come from the denominator alone
  * (matched-Z of a stable analogue prototype), so it is always stable.
@@ -124,41 +83,6 @@ static inline double zc_section_tick(ZcSection *s, double x) {
   return y;
 }
 
-/* gain divider: the taper position W in [0,1] is split into two resistances
- * Rt, Rb of the model (W=0.5 -> Rt=Rb -> neutral gain; +1 avoids division by zero) */
-static inline void zc_Rt_Rb(double W, double *Rt, double *Rb) {
-  *Rt = 10000.0 * W + 1.0; *Rb = 10000.0 * (1.0 - W) + 1.0;
-}
-
-/* Builds the ANALOG coeffs (b,a descending) of a bell/shelf section
- * from the norm controls (nf, ng) and their tapers/caps.
- * The ftap/wtap tables are POT-WIPER fractions, not magic numbers: they are design tables derived
- * from the schematic that make each band's peak sweep log-uniformly (F ~= exp(-5.55*nf+c), one
- * shared log-pot law; the caps differ per band). They also carry a ~1 % circuit-compensation term,
- * which is why the closed-form pot law is documented here but NOT substituted for the tables --
- * substituting it would move the audio. */
-static inline void zc_bellshelf_analog(ZcKind kind,
-        const float *ftap, const float *wtap, const double *cap,
-        double nf, double ng, double *b, int *nb, double *a, int *na) {
-  double F = zc_lut(ftap, nf), W = zc_lut(wtap, ng);
-  double Rt, Rb; zc_Rt_Rb(W, &Rt, &Rb); double Rf = 50000.0 * F + 1.0;
-  double Cf = cap[0], Ct = cap[1];
-  if (kind == ZC_HISHELF)      { zc_hishelf_coeffs(Rt, Rb, Rf, Cf, Ct, b, a); *nb = 3; *na = 3; }
-  else if (kind == ZC_LOSHELF) { zc_loshelf_coeffs(Rt, Rb, Rf, Cf, Ct, b, a); *nb = 2; *na = 3; }
-  else                            { zc_bell_coeffs   (Rt, Rb, Rf, Cf, Ct, b, a); *nb = 3; *na = 4; }
-}
-
-/* HP/LP Sallen-Key 2nd order, normalized analog coeffs (b,a descending). */
-static inline void zc_hp_analog(double fc, double Q, double *b, int *nb, double *a, int *na) {
-  double w0 = 2.0 * M_PI * fc;
-  b[0] = 1.0; b[1] = 0.0; b[2] = 0.0;                 /* s^2 */
-  a[0] = 1.0; a[1] = w0 / Q; a[2] = w0 * w0; *nb = 3; *na = 3;
-}
-static inline void zc_lp_analog(double fc, double Q, double *b, int *nb, double *a, int *na) {
-  double w0 = 2.0 * M_PI * fc;
-  b[0] = 0.0; b[1] = 0.0; b[2] = w0 * w0;             /* unity at DC */
-  a[0] = 1.0; a[1] = w0 / Q; a[2] = w0 * w0; *nb = 3; *na = 3;
-}
 
 /* Builds a section: analog -> matched-Z + FIR correction (at fs) -> fills ZcSection. */
 /* NOTE: these builders only (re)compute b/a/nb/na; they do NOT touch the z[] state, so they serve to
@@ -183,7 +107,7 @@ static inline void zc_section_keep_or_bypass(ZcSection *sec, int ok) {
   }
 }
 
-static inline void zc_section_build_bellshelf(ZcSection *sec, ZcKind kind,
+static inline int zc_section_build_bellshelf(ZcSection *sec, ZcKind kind,
         const float *ftap, const float *wtap, const double *cap,
         double nf, double ng, double fs) {
   double b[4], a[4]; int nb, na;
@@ -192,8 +116,9 @@ static inline void zc_section_build_bellshelf(ZcSection *sec, ZcKind kind,
   int ok = zc_matched_design(b, nb, a, na, fs, tb, &tnb, ta, &tna);
   if (ok) zc_section_store(sec, tb, tnb, ta, tna);
   zc_section_keep_or_bypass(sec, ok);
+  return ok;
 }
-static inline void zc_section_build_filter(ZcSection *sec, ZcKind kind,
+static inline int zc_section_build_filter(ZcSection *sec, ZcKind kind,
         double fc, double Q, double fs) {
   double b[4], a[4]; int nb, na;
   double tb[ZC_MAX_N + 1], ta[ZC_MAX_N + 1]; int tnb, tna;
@@ -202,29 +127,30 @@ static inline void zc_section_build_filter(ZcSection *sec, ZcKind kind,
   int ok = zc_matched_design(b, nb, a, na, fs, tb, &tnb, ta, &tna);
   if (ok) zc_section_store(sec, tb, tnb, ta, tna);
   zc_section_keep_or_bypass(sec, ok);
+  return ok;
 }
 
 /* ----------------------------------------------------------------- drive oversampling FIR (windowed-sinc 2x, cascade)
  * Used ONLY by the DRIVE (below): its non-linear shaper aliases, so it is run at 2x/4x and this
  * half-band FIR does the up/down sampling. The EQ is analog-matched and never oversamples. */
 /* Half-band low-pass kernel for the drive's oversampling: 31 taps, Kaiser(beta = 5.0), cutoff
- * exactly fs_os/4, DC gain 1, padded with one trailing zero to 32 so the reference path keeps a
+ * exactly fs_os/4, DC gain 1, padded with one trailing zero to 32 so the direct-form reference convolution keeps a
  * power-of-two buffer.
  *
  * In a half-band every tap at an even offset from the centre is exactly zero, which here makes all
  * the ODD indices zero except the centre. In polyphase form one phase of the interpolator
  * collapses to a single coefficient -- a pure delay -- so 32 multiplies per input sample become
- * 16 + 1. Those zeros are structural rather than a fitting accident, and compare/genhalfband.py
+ * 16 + 1. Those zeros are structural rather than a fitting accident, and the laboratory's genhalfband.py
  * refuses any length that is not 4m+3 rather than quietly designing a worse filter.
  *
  * The symmetry is around index 15, NOT 15.5: kernel[k] == kernel[30-k] with kernel[31] == 0, so
  * kernel[k] == kernel[31-k] is false and a convolution folded on that identity would compute the
- * wrong thing. zc_fir_conv below is unfolded for exactly this reason.
+ * wrong thing. The reference convolution is unfolded for exactly this reason.
  *
  * Group delay is 15 samples at the oversampled rate. Nothing here hardcodes the resulting plugin
  * latency; it is derived from the oversampling factor where it is reported.
  *
- * Regenerate with compare/genhalfband.py, which pins the symmetry after normalising. Do not
+ * Regenerate with the laboratory's genhalfband.py, which pins the symmetry after normalising. Do not
  * hand-edit: the folded and polyphase paths both rely on the exact zeros and the exact mirror. */
 #define ZC_OS_TAPS 32
 #define ZC_OS_MASK (ZC_OS_TAPS - 1)        /* TAPS is a power of 2 -> circular indexing via mask */
@@ -238,34 +164,13 @@ static const double zc_os_kernel[ZC_OS_TAPS] = {
    0.014675772709985322,  0, -0.0072044221929927947,  0,
    0.0029449330549970549,  0, -0.00077911205399922078,  0,
 };
-/* Delay line as a CIRCULAR BUFFER: 'w' is the index of the newest sample, so a push only moves
-   the index instead of shifting the window.
-   The line is stored TWICE, z[i] == z[i + ZC_OS_TAPS], so a window of ZC_OS_TAPS consecutive taps
-   starting anywhere in 0..ZC_OS_MASK is CONTIGUOUS and needs no wrap. That removes the & mask from
-   every read in conv() below, which is what otherwise stops the compiler from vectorising it. It
-   costs one extra store per push and 128 bytes per instance. */
-typedef struct { double z[2 * ZC_OS_TAPS]; int w; } ZcFir;
-static inline void zc_fir_reset(ZcFir *f) { memset(f->z, 0, sizeof f->z); f->w = 0; }
-static inline void zc_fir_push(ZcFir *f, double x) {
-  f->w = (f->w - 1) & ZC_OS_MASK; f->z[f->w] = x; f->z[f->w + ZC_OS_TAPS] = x;
-}
-/* conv = sum_k kernel[k]*z[k]  (z[0] = newest -> z[(w+k)&mask] in the circular buffer). */
-static inline double zc_fir_conv(const ZcFir *f) {
-  const double *z = f->z + f->w;      /* mirrored buffer: no wrap for the next ZC_OS_TAPS taps */
-  double s = 0.0;
-  /* Deliberately UNFOLDED. The kernel is a padded half-band whose symmetry is about index 15,
-   * with kernel[31] the padding zero, so folding on kernel[k] == kernel[31-k] would be wrong.
-   * This is the REFERENCE path, treated by the harnesses in compare/ as the definition of the
-   * filter, so it is written for obviousness rather than speed; the plugin runs zc_up2_block. */
-  for (int k = 0; k < ZC_OS_TAPS; k++) s += zc_os_kernel[k] * z[k];
-  return s;
-}
 
 /* ----------------------------------------------------------------- channel drive (input stage)
- * ASYMMETRIC memoryless shaper (console/transformer style) BOUNDED: a SKEWED tanh that matches a
- * reference cubic curve over its valid range and SATURATES cleanly outside it (the raw cubic folds back at
- * -7.7 dBFS). Followed by a 1st-order DC-blocker ~14.6 Hz (removes the offset introduced by the asymmetry).
- * Memoryless.
+ * ASYMMETRIC memoryless shaper (console/transformer style) BOUNDED: a SKEWED tanh that saturates cleanly.
+ * Its constants are GENERATED from a three-number spec by the laboratory's gen_drive.py (+ceiling -9.28 dBFS,
+ * -ceiling -6.10 dBFS, small-signal slope 0.978), and `make drvgen` fails if these drift from it
+ * (provenance in the laboratory's notes on the tables and the drive). Followed by a 1st-order DC-blocker
+ * ~14.6 Hz (removes the offset introduced by the asymmetry). Memoryless.
  * Knob d (0..1): 0 = BYPASS; 0.5 = nominal intensity (pre-gain g=1); g = 2*d.
  *   y = f(g*x)/g  -> small-signal gain is CONSTANT in g, equal to f'(0) (ZC_DRV_FP0 ~= 0.978, not unity). */
 #define ZC_DRV_S  0.4195088267
@@ -291,14 +196,15 @@ static inline double zc_drive_shape(double u) { return ZC_DRV_S * (tanh(ZC_DRV_K
  * ln(cosh(v)) is evaluated as |v| + log1p(exp(-2|v|)) - ln2. The direct form overflows for
  * |v| >~ 350, which this drive reaches on a loud input at a high knob setting -- not a theoretical
  * nicety. The stable form costs nothing extra and cannot overflow. */
-/* exp() restricted to x in [-20, 0], which is the ONLY range zc_drive_logcosh can hand it, since
-   its argument is -2*fabs(v). Range reduction x = k*ln2 + r, degree-7 Taylor for exp(r) with
-   |r| <= ln2/2, then scaling by 2^k through the exponent field. Worst relative error over the
-   range is -163 dB, and it saves about 11 % of the plugin at drive 2x.
+/* exp() restricted to x in [-36, 0], which is the ONLY range zc_drive_logcosh can hand it: its
+   argument is -2*fabs(v), and zc_drive_logcosh returns early for fabs(v) > 18. Range reduction
+   x = k*ln2 + r, degree-7 Taylor for exp(r) with |r| <= ln2/2, then scaling by 2^k through the
+   exponent field. Worst relative error over the range is -163 dB, and it saves about 11 % of the
+   plugin at drive 2x.
    NOT a general exp: there is no handling of inf, nan, overflow or subnormals. It is safe here
-   because k lands in [-29, 0], so the scale factor is always a normal double. That is a property
+   because k lands in [-52, 0], so the scale factor is always a normal double. That is a property
    of the caller rather than something checked at run time, which is why the domain is stated
-   above and pinned by `make valpoly`.
+   here and the caller's early return is what keeps it.
    It only pays once SSE4.1 is available: without it GCC expands floor() into a branchy integer
    round trip and this is about 20 % SLOWER than libm, which is why it sits behind the function
    clones below. */
@@ -316,6 +222,15 @@ static inline double zc_fast_exp_neg(double x) {
 }
 static inline double zc_drive_logcosh(double v) {
   double a = fabs(v);
+#ifndef ZC_NO_LOGCOSH_GUARD
+  /* Past |v| = 18, t = exp(-2a) < 2.4e-16 and a + t*P(t) rounds to a exactly, so returning a - ln2
+   * is not an approximation: it is the same double. It is also what keeps zc_fast_exp_neg inside
+   * its domain. Without it a loud input (about +37 dBFS into the oversampled drive at full knob)
+   * hands it x < -708, the 2^k it builds in the exponent field wraps, and the drive emits a
+   * non-finite value that its DC blocker then keeps for ever. ZC_NO_LOGCOSH_GUARD restores that
+   * (the negative arm of make abuse). */
+  if (a > 18.0) return a - 0.6931471805599453;
+#endif
   /* log1p(t) with t = exp(-2a), evaluated as t*P(t) by a degree-7 Chebyshev fit instead of calling
      libm. log1p and exp together accounted for roughly 40 % of the drive path; replacing both
      saves about 21 % of the whole plugin at drive 2x, for a worst-case deviation of -107.5 dB
@@ -327,7 +242,7 @@ static inline double zc_drive_logcosh(double v) {
          amplify a JAGGED error by up to a factor of 1e6. A polynomial's error is SMOOTH, so it
          very nearly cancels in the difference and what survives is its derivative rather than its
          value divided by dx. The measured amplification is a constant ~18 dB.
-     Coefficients come from compare/genlogp.py and are checked against libm by compare/valpoly.c
+     Coefficients come from the laboratory's genlogp.py and are checked against libm by the laboratory's valpoly.c
      (`make valpoly`) over 200001 points. Do not hand-edit them: the Horner order is not obvious
      from the values, and getting it wrong shows up in the audio rather than in review. */
   { double t = zc_fast_exp_neg(-2.0 * a);
@@ -411,12 +326,14 @@ static inline void zc_drive_block_adaa(ZcDrive *restrict d, double *restrict x,
                                        double *restrict hbuf, int n) {
   const double g = d->g;
   if (g <= 1e-6) {                                    /* clean g->0 limit, same as the tick */
+    const double last_in = n ? x[n - 1] : d->ax;      /* the ADAA state is the last INPUT, read
+                                                       * before the loop overwrites x with y */
     for (int i = 0; i < n; i++) {
       double s = ZC_DRV_FP0 * x[i];
       double y = s - d->x1 + d->r * d->y1;
       d->x1 = s; d->y1 = y; x[i] = y;
     }
-    d->ax = n ? x[n - 1] : d->ax; d->aH = 0.0;
+    d->ax = last_in; d->aH = 0.0;
     return;
   }
   const double ig2 = 1.0 / (g * g);
@@ -433,39 +350,21 @@ static inline void zc_drive_block_adaa(ZcDrive *restrict d, double *restrict x,
   d->ax = ax; d->aH = aH; d->x1 = x1; d->y1 = y1;
 }
 
-static inline double zc_drive_tick_adaa(ZcDrive *d, double x) {
-  double g = d->g, s;
-  if (g > 1e-6) {
-    const double ig2 = 1.0 / (g * g);
-    double H = zc_drive_antideriv(g * x) * ig2;
-    double dx = x - d->ax;
-    s = (fabs(dx) > 1e-6) ? (H - d->aH) / dx
-                          : zc_drive_shape(g * (0.5 * (x + d->ax))) / g;
-    d->ax = x; d->aH = H;
-  } else {
-    s = ZC_DRV_FP0 * x;                                 /* same clean g->0 limit as the bare path */
-    d->ax = x; d->aH = 0.0;
-  }
-  double y = s - d->x1 + d->r * d->y1;
-  d->x1 = s; d->y1 = y;
-  return y;
-}
-
 /* ---- drive with OPTIONAL oversampling ---------------------------------------------------------
  * The drive shaper is NON-LINEAR and MEMORYLESS, so it generates harmonics above Nyquist that fold
- * back as aliasing: about -14 dB of alias to signal at 9 kHz and maximum drive. Unlike
+ * back as aliasing (audible on bright material at high drive without oversampling). Unlike
  * the EQ (linear, no aliasing), the only clean fix is to run the shaper at a higher rate. This wraps
  * the drive in the windowed-sinc 2x FIR cascade above (up -> shaper@fs_os -> down), with a user
  * switch. With os==1 it is BIT-IDENTICAL to the bare zc_drive path (stages=0, no FIR, DC-blocker at
  * base_fs), so "Off" reproduces the plain drive exactly (no regression).
- * With os==2 the shaper inside the oversampled section is the ADAA form, which is what makes this
- * beat the old 4x while costing less than the old 2x. */
+ * With os > 1 the shaper inside the oversampled section is the ADAA form (antiderivative
+ * anti-aliasing), which suppresses the alias the oversampling alone leaves. */
 /* ================================================================================================
  * THE FAST OVERSAMPLING PATH -- polyphase + portable SIMD
  * ================================================================================================
  * With 32 taps at 4x the FIRs are where the plugin spends its time, and a normal session carries
- * dozens of instances. Two separate things make the reference path above expensive (it is kept
- * regardless, because the harnesses in compare/ use it as the definition of the filter):
+ * dozens of instances. Two separate things make a direct-form path expensive (the direct form lives
+ * in the laboratory's harnesses, which use it as the definition of the filter):
  *
  *   1. THE UPSAMPLER MULTIPLIES BY ZEROS. It pushes a real sample, convolves 32 taps, pushes a
  *      literal 0.0, and convolves 32 taps again. Half of every convolution is therefore
@@ -479,12 +378,12 @@ static inline double zc_drive_tick_adaa(ZcDrive *d, double x) {
  *      dependency chain.
  *
  * VECTOR EXTENSIONS RATHER THAN <immintrin.h>, and that is the point. zc_driveos_process carries
- *   target_clones("default","avx2","arch=x86-64-v3"), so this source is compiled once per clone:
- *   the avx2 clone gets 4-wide ymm FMA and the default clone gets 2-wide SSE2 from the same lines.
+ *   target_clones("default","arch=x86-64-v3"), so this source is compiled once per clone: the
+ *   x86-64-v3 clone gets 4-wide ymm FMA and the default clone gets 2-wide SSE2 from the same lines.
  *   AVX2 intrinsics here would pin the whole plugin to a CPU that has AVX2.
  *
  * This path is NOT bit-identical to the reference one, deliberately: the terms are the same, the
- *   ORDER of the additions is not. compare/fir_fast_check.c pins the difference at rounding level
+ *   ORDER of the additions is not. the laboratory's fir_fast_check.c pins the difference at rounding level
  *   and has a negative leg.
  *
  * The two polyphase tables are DERIVED from zc_os_kernel at prepare() time, never written out by
@@ -607,7 +506,7 @@ static inline void zc_dn2_body(ZcDnState *restrict f, const ZcOsPhases *restrict
                                double *restrict src, double *restrict dst, int len, const int T) {
   for (int j = 0; j < T - 1; j++) src[j - (T - 1)] = f->hist[j];
   for (int i = 0; i < len; i++) {
-    /* the reference path pushes src[2i] then src[2i+1] and convolves, so the newest sample of the
+    /* the direct-form reference pushes src[2i] then src[2i+1] and convolves, so the newest sample of the
      * window is src[2i+1] and the window is the T samples ending there. */
     const double *restrict w = src + 2 * i + 1 - (T - 1);
     dst[i] = zc_dot(p->kr, w, T);
@@ -632,15 +531,16 @@ static inline void zc_dn2_block(ZcDnState *restrict f, const ZcOsPhases *restric
  *
  * Measuring this on a single high-frequency sine is misleading, because a short FIR's own leakage
  * becomes the ceiling and hides the difference. It has to be judged on material with real energy
- * near Nyquist. Full tables: docs/MEDICIONES_HANDOFF.md. */
+ * near Nyquist. The full tables are in the laboratory's measurement notes. */
 #define ZC_DRV_MAX_STAGES 2   /* 2^2 = 4x maximum for the drive */
 
 /* Block size the engine chunks to, and the scratch that implies. They live HERE, with the engine
  * that dictates them, rather than in lv2.c, so that everything that needs the figure -- the plugin
- * and the memory report in compare/ -- reads one definition. */
+ * and the laboratory's memory report -- reads one definition. */
 #define ZC_MAXBLK 1024
-/* + ZC_OS_PAD twice: the oversampler's FIRs are overlap-save, so each buffer carries run-up in
- * front of the signal AND the caller's pointer is offset into it. Derived, not a magic number. */
+/* + ZC_OS_PAD: the oversampler's FIRs are overlap-save, so each buffer carries run-up in front of
+ * the signal and the caller's pointer is offset past it. The run-up and the offset are the same
+ * ZC_OS_PAD doubles, so one of the two is margin (256 bytes per buffer), kept deliberately. */
 #define ZC_SCRATCH_LEN (ZC_MAXBLK * (1 << ZC_DRV_MAX_STAGES) + 2 * ZC_OS_PAD)
 typedef struct {
   ZcDrive drv;                                   /* shaper + DC-blocker, coeffs set at fs_os */
@@ -659,10 +559,14 @@ static inline void zc_driveos_reset(ZcDriveOS *d) {
 /* set gain/DC-blocker for the (possibly oversampled) rate; recomputes os/stages. Does NOT reset the
  * FIR/DC state -> safe for a live knob move (same os). Caller resets when os changes or on engage. */
 static inline void zc_driveos_set(ZcDriveOS *d, double knob, double base_fs, int os) {
-  if (os > 4) os = 4;                            /* 4x is the maximum; see ZC_DRV_MAX_STAGES above */
+  /* The factor is decided by the wrapper (os_factor in lv2.c); this is only the memory bound, so
+   * that no value could size a cascade deeper than the scratch (ZC_DRV_MAX_STAGES). */
+  if (os > 4) os = 4;
   d->os = os; d->stages = 0; for (int o = os; o > 1; o >>= 1) d->stages++;
-  zc_os_phases_from(&d->ph[0], zc_os_kernel, ZC_OS_TAPS);   /* outer: long half-band */
-  zc_os_phases_from(&d->ph[1], zc_in_kernel, ZC_IN_TAPS);   /* inner: short half-band */
+  if (d->ph[0].T == 0) {    /* the kernels are constants: built once (d must start zeroed, as calloc does) */
+    zc_os_phases_from(&d->ph[0], zc_os_kernel, ZC_OS_TAPS);   /* outer: long half-band */
+    zc_os_phases_from(&d->ph[1], zc_in_kernel, ZC_IN_TAPS);   /* inner: short half-band */
+  }
   zc_drive_set(&d->drv, knob, base_fs * os);     /* DC-blocker frequency tracks fs_os */
 }
 /* process a block: upsample (2x cascade) -> memoryless shaper@fs_os -> downsample. os==1 = bare path.
@@ -676,10 +580,11 @@ static inline void zc_driveos_set(ZcDriveOS *d, double knob, double base_fs, int
    baseline ISA even on a machine with AVX2. It is called once per block, so the indirect call
    costs nothing at this boundary; per sample it would cost more than it buys by blocking
    inlining. */
-__attribute__((target_clones("default","avx2","arch=x86-64-v3")))
-static void zc_driveos_process(ZcDriveOS *restrict d, const float *restrict in,
-                                       float *restrict out, int n,
+__attribute__((target_clones("default","arch=x86-64-v3")))
+static void zc_driveos_process(ZcDriveOS *restrict d, const float *in,
+                                       float *out, int n,
                                        double *restrict sa, double *restrict sb) {
+  /* in and out may be the same buffer (a host may process in place), so neither is restrict. */
   if (d->os == 1) { for (int i = 0; i < n; i++) out[i] = (float)zc_drive_tick(&d->drv, in[i]); return; }
   /* Both scratch buffers are used from ZC_OS_PAD onwards: every FIR below reads a window that
    * starts before the block, and that run-up is written in place. The caller sizes them for it. */
@@ -705,7 +610,7 @@ static void zc_driveos_process(ZcDriveOS *restrict d, const float *restrict in,
  * os==1 -> 0. It is obtained from an impulse through the FIR cascade only, with no shaper.
  * This is the FIR round trip ONLY. When the oversampled path runs, the ADAA shaper adds its own
  * half-sample delay AT THE OVERSAMPLED RATE, i.e. 0.5/os samples at the base rate;
- * zc_driveos_latency_total below adds it. At 2x that is 7.0 + 0.25 = 7.25. */
+ * zc_driveos_latency_total below adds it. At 2x that is 14.5 + 0.25 = 14.75. */
 static inline float zc_driveos_latency(int os) {
   if (os <= 1) return 0.0f;
   int stages = 0; for (int o = os; o > 1; o >>= 1) stages++;
@@ -718,7 +623,7 @@ static inline float zc_driveos_latency(int os) {
   zc_os_phases_from(&ph[1], zc_in_kernel, ZC_IN_TAPS);
   for (int s = 0; s < stages; s++) { zc_upstate_reset(&up[s]); zc_dnstate_reset(&dn[s]); }
   enum { N = 256 };
-  static double a[N * 4 + 2 * ZC_OS_PAD], b[N * 4 + 2 * ZC_OS_PAD];
+  double a[N * 4 + 2 * ZC_OS_PAD], b[N * 4 + 2 * ZC_OS_PAD];   /* on the stack: no state shared between instances */
   memset(a, 0, sizeof a); memset(b, 0, sizeof b);
   double *cur = a + ZC_OS_PAD, *nxt = b + ZC_OS_PAD; int len = N;
   for (int i = 0; i < N; i++) cur[i] = (i == 0) ? 1.0 : 0.0;
@@ -738,9 +643,9 @@ static inline float zc_driveos_latency(int os) {
 
 /* Total latency the drive stage adds, in samples at the BASE rate.
  * = FIR round trip + the ADAA half sample, expressed at the base rate.
- * At 2x it is 7.25 and at 4x 16.93, i.e. NOT integer, which is why the latency port is not
- * declared as an integer. Cross-checked against a direct measurement of the whole path: a residual
- * minimisation against a 32x reference puts the 2x delay at exactly 7.25. */
+ * At 2x it is 14.75 and at 4x 16.93, i.e. NOT integer, which is why the latency port is not
+ * declared as an integer. Cross-checked against the impulse centroid of the whole oversampled
+ * path, which lands within a few hundredths of a sample of both figures. */
 static inline float zc_driveos_latency_total(int os) {
   if (os <= 1) return 0.0f;
   return zc_driveos_latency(os) + 0.5f / (float)os;
@@ -795,53 +700,48 @@ static inline void zc_chain_process2(ZcChain *cl, ZcChain *cr,
  * All continuous values (freq, gain) are norm 0..1 (gain 0.5 = neutral gain). */
 typedef struct {
   int    hp_on;    double hp_freq;
-  int    hp_bump;        /* HP: 0 = clean Butterworth / 1 = resonant (BUMP, ~+1.5 dB at the cutoff) */
+  int    hp_bump;        /* HP: 0 = clean Butterworth / 1 = resonant (BUMP, +1.25 dB about half an octave above the corner) */
   struct { int on; int shelf; double freq, gain; } band[4];
   int    lp_on;    double lp_freq;
   int    lp_resonant;     /* LP: 0 = Q=0.707 (no peak) / 1 = Q=0.99 (with resonant boost) */
 } ZcControls;
 
-static inline const float *zc_ftap_band(int b) {
-  switch (b) { case 0: return ZC_FTAP_LOW; case 1: return ZC_FTAP_LOMID;
-               case 2: return ZC_FTAP_HIMID; default: return ZC_FTAP_HI; }
+
+/* The three section designers, one per slot kind: every path that designs a section (the full fill, the reuse
+ * rebuild, the round-robin refresh, the refinement and the grid's filler) goes through these, so a slot is designed
+ * the same way wherever it is designed. shelf is honoured only for the Low (b = 0) and High (b = 3) bands. Each returns
+ * the designer's verdict (0 = it failed and the section kept its previous design, or passes through). */
+static inline int zc_section_build_band(ZcSection *s, int b, int shelf, double freq, double gain, double fs) {
+  if ((b == 0 || b == 3) && shelf)
+    return zc_section_build_bellshelf(s, (b == 3) ? ZC_HISHELF : ZC_LOSHELF,
+                               (b == 3) ? ZC_FTAP_HI_SHELF : ZC_FTAP_LO_SHELF,
+                               (b == 3) ? ZC_WTAP_HI_SHELF : ZC_WTAP_LO_SHELF,
+                               (b == 3) ? ZC_CAP_HI_SHELF  : ZC_CAP_LO_SHELF, freq, gain, fs);
+  return zc_section_build_bellshelf(s, ZC_BELL, zc_ftap_band(b), zc_wtap_band(b), zc_cap_band(b), freq, gain, fs);
 }
-static inline const float *zc_wtap_band(int b) {
-  switch (b) { case 0: return ZC_WTAP_LOW; case 1: return ZC_WTAP_LOMID;
-               case 2: return ZC_WTAP_HIMID; default: return ZC_WTAP_HI; }
+static inline void zc_section_build_hp(ZcSection *s, const ZcControls *ct, double fs) {
+  double fc = zc_interp(ct->hp_freq, ZC_HP_NORM, ZC_HP_HZ, ZC_ARRLEN(ZC_HP_NORM));
+  zc_section_build_filter(s, ZC_HP, fc, ct->hp_bump ? ZC_HP_Q : ZC_HP_Q_FLAT, fs);
 }
-static inline const double *zc_cap_band(int b) {
-  switch (b) { case 0: return ZC_CAP_LOW; case 1: return ZC_CAP_LOMID;
-               case 2: return ZC_CAP_HIMID; default: return ZC_CAP_HI; }
+static inline void zc_section_build_lp(ZcSection *s, const ZcControls *ct, double fs) {
+  double fc = zc_interp(ct->lp_freq, ZC_LP_NORM, ZC_LP_HZ, ZC_ARRLEN(ZC_LP_NORM));
+  zc_section_build_filter(s, ZC_LP, fc, ct->lp_resonant ? ZC_LP_Q_RESONANT : ZC_LP_Q_CLEAN, fs);
+}
+/* copies a section's design (degrees and coefficients), never its state */
+static inline void zc_section_copy_design(ZcSection *dst, const ZcSection *src) {
+  dst->nb = src->nb; dst->na = src->na;
+  for (int k = 0; k <= ZC_MAX_NB; k++) dst->b[k] = src->b[k];
+  for (int k = 0; k <= ZC_MAX_NA; k++) dst->a[k] = src->a[k];
 }
 
 /* fills c->sec[] and c->nsec from the controls (at c->fs). Does NOT touch the z[] state. */
 static inline void zc_chain_fill(ZcChain *c, const ZcControls *ct) {
   double fs = c->fs; c->nsec = 0;
-  if (ct->hp_on) {
-    double fc = zc_interp(ct->hp_freq, ZC_HP_NORM, ZC_HP_HZ, ZC_ARRLEN(ZC_HP_NORM));
-    double q = ct->hp_bump ? ZC_HP_Q : ZC_HP_Q_FLAT;
-    zc_section_build_filter(&c->sec[c->nsec++], ZC_HP, fc, q, fs);
-  }
-  for (int b = 0; b < 4; b++) {
-    if (!ct->band[b].on) continue;
-    if ((b == 0 || b == 3) && ct->band[b].shelf) {
-      ZcKind kind = (b == 3) ? ZC_HISHELF : ZC_LOSHELF;
-      const float *ft = (b == 3) ? ZC_FTAP_HI_SHELF : ZC_FTAP_LO_SHELF;
-      const float *wt = (b == 3) ? ZC_WTAP_HI_SHELF : ZC_WTAP_LO_SHELF;
-      const double *cap = (b == 3) ? ZC_CAP_HI_SHELF : ZC_CAP_LO_SHELF;
-      zc_section_build_bellshelf(&c->sec[c->nsec++], kind, ft, wt, cap,
-                                    ct->band[b].freq, ct->band[b].gain, fs);
-    } else {
-      zc_section_build_bellshelf(&c->sec[c->nsec++], ZC_BELL,
-            zc_ftap_band(b), zc_wtap_band(b), zc_cap_band(b),
-            ct->band[b].freq, ct->band[b].gain, fs);
-    }
-  }
-  if (ct->lp_on) {
-    double fc = zc_interp(ct->lp_freq, ZC_LP_NORM, ZC_LP_HZ, ZC_ARRLEN(ZC_LP_NORM));
-    double Q = ct->lp_resonant ? ZC_LP_Q_RESONANT : ZC_LP_Q_CLEAN;
-    zc_section_build_filter(&c->sec[c->nsec++], ZC_LP, fc, Q, fs);
-  }
+  if (ct->hp_on) zc_section_build_hp(&c->sec[c->nsec++], ct, fs);
+  for (int b = 0; b < 4; b++)
+    if (ct->band[b].on)
+      zc_section_build_band(&c->sec[c->nsec++], b, ct->band[b].shelf, ct->band[b].freq, ct->band[b].gain, fs);
+  if (ct->lp_on) zc_section_build_lp(&c->sec[c->nsec++], ct, fs);
 }
 
 /* builds the chain FROM SCRATCH (structure change): fills + RESETS state. */
@@ -851,30 +751,20 @@ static inline void zc_chain_build(ZcChain *c, const ZcControls *ct, double base_
   zc_chain_reset_state(c);
 }
 
-/* LIVE refresh of coefficients (structure unchanged): keeps state -> no clicks. */
-static inline void zc_chain_update(ZcChain *c, const ZcControls *ct) {
-  zc_chain_fill(c, ct);
-}
-
 /* Copies the DESIGN (coefficients and degrees) from one chain to another, and deliberately NOT
  * the z[] state.
  *
  * zc_chain_fill is a pure function of (ct, fs) and both channels are always handed the SAME ct, so
  * designing twice produces bit-identical coefficients. Designing once and copying therefore halves
  * the cost for exactly zero difference in output, and that cost is not small: a full chain design
- * takes about 19.7 ms, which is over seven times a 256-sample block's budget at 48 kHz.
+ * takes about 0.7 ms on an i7-8700K, over half a 64-sample block's budget at 48 kHz.
  *
  * The state must NOT come along. z[] is the filter's memory of the audio that channel has heard,
  * so copying it would inject the left channel's history into the right one. */
 static inline void zc_chain_copy_design(ZcChain *dst, const ZcChain *src) {
   dst->nsec = src->nsec;
   dst->fs   = src->fs;
-  for (int i = 0; i < src->nsec; i++) {
-    dst->sec[i].nb = src->sec[i].nb;
-    dst->sec[i].na = src->sec[i].na;
-    for (int k = 0; k <= ZC_MAX_NB; k++) dst->sec[i].b[k] = src->sec[i].b[k];
-    for (int k = 0; k <= ZC_MAX_NA; k++) dst->sec[i].a[k] = src->sec[i].a[k];
-  }
+  for (int i = 0; i < src->nsec; i++) zc_section_copy_design(&dst->sec[i], &src->sec[i]);
 }
 
 /* Processes a block while RAMPING the coefficients from one design to another.
@@ -885,8 +775,8 @@ static inline void zc_chain_copy_design(ZcChain *dst, const ZcChain *src) {
  * at about 6 dB per doubling exactly as a step-size argument predicts.
  *
  * Redesigning every 16 to 32 samples would fix it and is not affordable: one section design costs
- * about 0.39 ms, so redesigning every 16 samples would be roughly 1.2 seconds of CPU per second of
- * audio.
+ * about 0.11 ms on an i7-8700K, so redesigning one section every 16 samples at 48 kHz would be
+ * about a third of a core per moving knob.
  *
  * Instead this uses the two designs it ALREADY has -- the previous one and this block's -- and
  * walks between them in a few sub-steps, delivering the same total change in K smaller steps. No
@@ -896,7 +786,7 @@ static inline void zc_chain_copy_design(ZcChain *dst, const ZcChain *src) {
  * Note that this INTERPOLATES a[], the denominator. In general nothing about the magnitude of an
  * interpolated filter guarantees its poles stay inside the unit circle; it is defensible here only
  * because the two endpoints are one block apart, so the path between them is short. Since that is
- * an argument rather than evidence, compare/ramp_stability.c checks the pole radius of every
+ * an argument rather than evidence, the laboratory's ramp_stability.c checks the pole radius of every
  * interpolated set produced by a fast sweep of every control. */
 static inline void zc_chain_process_ramp(ZcChain *c, const ZcChain *from, const ZcChain *to,
                                          const float *in, float *out, int n, int steps) {
@@ -905,6 +795,12 @@ static inline void zc_chain_process_ramp(ZcChain *c, const ZcChain *from, const 
   for (int s = 0; s < steps && done < n; s++) {
     const double t = (double)(s + 1) / (double)steps;
     for (int i = 0; i < c->nsec; i++) {
+      if (s == steps - 1) {
+        /* the last sub-step lands ON the target design: from + 1*(to - from) need not round back
+         * to `to`, and the chain keeps whatever this step leaves until the next knob move */
+        zc_section_copy_design(&c->sec[i], &to->sec[i]);
+        continue;
+      }
       for (int k = 0; k <= ZC_MAX_N; k++) {
         c->sec[i].b[k] = from->sec[i].b[k] + t * (to->sec[i].b[k] - from->sec[i].b[k]);
         c->sec[i].a[k] = from->sec[i].a[k] + t * (to->sec[i].a[k] - from->sec[i].a[k]);
@@ -924,14 +820,6 @@ static inline int zc_band_changed(const ZcControls *a, const ZcControls *b, int 
       || a->band[i].shelf != b->band[i].shelf || a->band[i].on != b->band[i].on;
 }
 
-/* LIVE refresh that only redesigns the sections whose controls actually moved.
- *
- * The structure is unchanged here (the caller checks the signature first), so the section order is
- * fixed and each section maps to a known slice of the controls. A section whose inputs did not
- * change would be handed the same (ct, fs) and would produce the same coefficients it already
- * holds, so skipping it is bit-identical -- not an approximation.
- *
- * In the common case a user moves ONE knob, so this designs one section instead of six. */
 /* Index of a logical slot inside a chain built from `ct`, or -1 if that slot is absent.
    slot: 0 = HP, 1..4 = bands 0..3, 5 = LP. */
 static inline int zc_slot_index(const ZcControls *ct, int slot) {
@@ -953,9 +841,14 @@ static inline int zc_slot_index(const ZcControls *ct, int slot) {
    coefficients across when the slot survived unchanged.
    Exactly equivalent, not an approximation: zc_section_build_* is a pure function of its inputs,
    so a copied design is the design that would have been computed. State is NOT copied -- the
-   caller still zeroes it, exactly as zc_chain_build did. */
+   caller still zeroes it, exactly as zc_chain_build did.
+   `approx` is the old chain's mask of INTERPOLATED sections (bit = old physical index): those are
+   not the design their controls would compute, so they are redesigned instead of copied. Copying
+   one would keep the grid's interpolation error for good, because the mask that would have
+   refined it is indexed by the OLD section order and is meaningless after the rebuild. */
 static inline void zc_chain_rebuild_reuse(ZcChain *c, const ZcChain *old, double base_fs,
-                                          const ZcControls *ct, const ZcControls *prev) {
+                                          const ZcControls *ct, const ZcControls *prev,
+                                          unsigned approx) {
   /* base_fs is taken as an argument and set here, exactly like zc_chain_build, rather than read
    * from c->fs. Reading it from the chain would assume the chain had already been built once; if
    * it has not, fs is 0, every design fails and every section falls back to pass-through, which
@@ -973,44 +866,20 @@ static inline void zc_chain_rebuild_reuse(ZcChain *c, const ZcChain *old, double
     if (ns < 0) continue;                       /* absent in the new structure */
     int os = zc_slot_index(prev, slot);
     int same = 0;
-    if (os >= 0 && os < old->nsec) {
+    if (os >= 0 && os < old->nsec && !(approx & (1u << os))) {
       if (slot == 0)      same = (ct->hp_freq == prev->hp_freq && ct->hp_bump == prev->hp_bump);
       else if (slot == 5) same = (ct->lp_freq == prev->lp_freq && ct->lp_resonant == prev->lp_resonant);
       else                same = !zc_band_changed(ct, prev, slot - 1);
     }
-    if (same) {                                  /* reuse: copy the coefficients, not the state */
-      out[n].nb = old->sec[os].nb; out[n].na = old->sec[os].na;
-      for (int k = 0; k <= ZC_MAX_NB; k++) out[n].b[k] = old->sec[os].b[k];
-      for (int k = 0; k <= ZC_MAX_NA; k++) out[n].a[k] = old->sec[os].a[k];
-    } else if (slot == 0) {
-      double fc = zc_interp(ct->hp_freq, ZC_HP_NORM, ZC_HP_HZ, ZC_ARRLEN(ZC_HP_NORM));
-      zc_section_build_filter(&out[n], ZC_HP, fc, ct->hp_bump ? ZC_HP_Q : ZC_HP_Q_FLAT, fs);
-    } else if (slot == 5) {
-      double fc = zc_interp(ct->lp_freq, ZC_LP_NORM, ZC_LP_HZ, ZC_ARRLEN(ZC_LP_NORM));
-      zc_section_build_filter(&out[n], ZC_LP, fc,
-                              ct->lp_resonant ? ZC_LP_Q_RESONANT : ZC_LP_Q_CLEAN, fs);
-    } else {
-      int b = slot - 1;
-      if ((b == 0 || b == 3) && ct->band[b].shelf) {
-        ZcKind kind = (b == 3) ? ZC_HISHELF : ZC_LOSHELF;
-        zc_section_build_bellshelf(&out[n], kind,
-              (b == 3) ? ZC_FTAP_HI_SHELF : ZC_FTAP_LO_SHELF,
-              (b == 3) ? ZC_WTAP_HI_SHELF : ZC_WTAP_LO_SHELF,
-              (b == 3) ? ZC_CAP_HI_SHELF  : ZC_CAP_LO_SHELF,
-              ct->band[b].freq, ct->band[b].gain, fs);
-      } else {
-        zc_section_build_bellshelf(&out[n], ZC_BELL, zc_ftap_band(b), zc_wtap_band(b),
-              zc_cap_band(b), ct->band[b].freq, ct->band[b].gain, fs);
-      }
-    }
+    if (same)           zc_section_copy_design(&out[n], &old->sec[os]);   /* reuse: the coefficients, not the state */
+    else if (slot == 0) zc_section_build_hp(&out[n], ct, fs);
+    else if (slot == 5) zc_section_build_lp(&out[n], ct, fs);
+    else                zc_section_build_band(&out[n], slot - 1, ct->band[slot - 1].shelf,
+                                              ct->band[slot - 1].freq, ct->band[slot - 1].gain, fs);
     n++;
   }
   c->nsec = n;
-  for (int i = 0; i < n; i++) {
-    c->sec[i].nb = out[i].nb; c->sec[i].na = out[i].na;
-    for (int k = 0; k <= ZC_MAX_NB; k++) c->sec[i].b[k] = out[i].b[k];
-    for (int k = 0; k <= ZC_MAX_NA; k++) c->sec[i].a[k] = out[i].a[k];
-  }
+  for (int i = 0; i < n; i++) zc_section_copy_design(&c->sec[i], &out[i]);
   for (int i = 0; i < n; i++) zc_section_reset(&c->sec[i]);
 }
 
@@ -1061,7 +930,7 @@ static inline int zc_chain_update_rr(ZcChain *c, const ZcControls *ct, ZcControl
   /* `start` is a COPY on purpose. Reading *cursor inside the loop while the body also writes it
    * makes the walk skip slots, and a skipped slot is not counted as pending either, so the
    * function would report "nothing left", the caller would sync prev, and those sections would keep
-   * their OLD coefficients indefinitely. compare/rr_converge.c is the check for that. */
+   * their OLD coefficients indefinitely. the laboratory's rr_converge.c is the check for that. */
   const int start = *cursor;
   int done = 0, pending = 0;
   for (int i = 0; i < nlog; i++) {
@@ -1074,14 +943,10 @@ static inline int zc_chain_update_rr(ZcChain *c, const ZcControls *ct, ZcControl
     if (done >= budget) { pending++; continue; }
 
     if (sl == 0) {
-      double fc = zc_interp(ct->hp_freq, ZC_HP_NORM, ZC_HP_HZ, ZC_ARRLEN(ZC_HP_NORM));
-      zc_section_build_filter(&c->sec[si], ZC_HP, fc,
-                              ct->hp_bump ? ZC_HP_Q : ZC_HP_Q_FLAT, fs);
+      zc_section_build_hp(&c->sec[si], ct, fs);
       prev->hp_freq = ct->hp_freq; prev->hp_bump = ct->hp_bump;
     } else if (sl == 5) {
-      double fc = zc_interp(ct->lp_freq, ZC_LP_NORM, ZC_LP_HZ, ZC_ARRLEN(ZC_LP_NORM));
-      zc_section_build_filter(&c->sec[si], ZC_LP, fc,
-                              ct->lp_resonant ? ZC_LP_Q_RESONANT : ZC_LP_Q_CLEAN, fs);
+      zc_section_build_lp(&c->sec[si], ct, fs);
       prev->lp_freq = ct->lp_freq; prev->lp_resonant = ct->lp_resonant;
     } else {
       int b = sl - 1;
@@ -1090,17 +955,8 @@ static inline int zc_chain_update_rr(ZcChain *c, const ZcControls *ct, ZcControl
         int which = shelf ? ((b == 3) ? ZC_GB_HISHELF : ZC_GB_LOSHELF) : b;
         zc_grid_lookup(&grid->band[which], ct->band[b].freq, ct->band[b].gain, &c->sec[si]);
         if (approx) *approx |= 1u << si;
-      } else if (shelf) {
-        ZcKind kind = (b == 3) ? ZC_HISHELF : ZC_LOSHELF;
-        const float *ft = (b == 3) ? ZC_FTAP_HI_SHELF : ZC_FTAP_LO_SHELF;
-        const float *wt = (b == 3) ? ZC_WTAP_HI_SHELF : ZC_WTAP_LO_SHELF;
-        const double *cap = (b == 3) ? ZC_CAP_HI_SHELF : ZC_CAP_LO_SHELF;
-        zc_section_build_bellshelf(&c->sec[si], kind, ft, wt, cap,
-                                   ct->band[b].freq, ct->band[b].gain, fs);
       } else {
-        zc_section_build_bellshelf(&c->sec[si], ZC_BELL,
-              zc_ftap_band(b), zc_wtap_band(b), zc_cap_band(b),
-              ct->band[b].freq, ct->band[b].gain, fs);
+        zc_section_build_band(&c->sec[si], b, shelf, ct->band[b].freq, ct->band[b].gain, fs);
       }
       prev->band[b] = ct->band[b];
     }
@@ -1122,18 +978,7 @@ static inline int zc_chain_refine_one(ZcChain *c, const ZcControls *ct, unsigned
   for (int b = 0; b < 4; b++) {
     if (!ct->band[b].on) continue;
     if (*approx & (1u << s)) {
-      if ((b == 0 || b == 3) && ct->band[b].shelf) {
-        ZcKind kind = (b == 3) ? ZC_HISHELF : ZC_LOSHELF;
-        const float *ft = (b == 3) ? ZC_FTAP_HI_SHELF : ZC_FTAP_LO_SHELF;
-        const float *wt = (b == 3) ? ZC_WTAP_HI_SHELF : ZC_WTAP_LO_SHELF;
-        const double *cap = (b == 3) ? ZC_CAP_HI_SHELF : ZC_CAP_LO_SHELF;
-        zc_section_build_bellshelf(&c->sec[s], kind, ft, wt, cap,
-                                   ct->band[b].freq, ct->band[b].gain, fs);
-      } else {
-        zc_section_build_bellshelf(&c->sec[s], ZC_BELL,
-              zc_ftap_band(b), zc_wtap_band(b), zc_cap_band(b),
-              ct->band[b].freq, ct->band[b].gain, fs);
-      }
+      zc_section_build_band(&c->sec[s], b, ct->band[b].shelf, ct->band[b].freq, ct->band[b].gain, fs);
       *approx &= ~(1u << s);
       return 1;
     }
@@ -1141,46 +986,6 @@ static inline int zc_chain_refine_one(ZcChain *c, const ZcControls *ct, unsigned
   }
   *approx = 0;                                   /* nothing matched: do not spin forever */
   return 0;
-}
-
-static inline void zc_chain_update_selective(ZcChain *c, const ZcControls *ct,
-                                             const ZcControls *prev) {
-  double fs = c->fs;
-  int s = 0;
-  if (ct->hp_on) {
-    if (ct->hp_freq != prev->hp_freq || ct->hp_bump != prev->hp_bump) {
-      double fc = zc_interp(ct->hp_freq, ZC_HP_NORM, ZC_HP_HZ, ZC_ARRLEN(ZC_HP_NORM));
-      double q = ct->hp_bump ? ZC_HP_Q : ZC_HP_Q_FLAT;
-      zc_section_build_filter(&c->sec[s], ZC_HP, fc, q, fs);
-    }
-    s++;
-  }
-  for (int b = 0; b < 4; b++) {
-    if (!ct->band[b].on) continue;
-    if (zc_band_changed(ct, prev, b)) {
-      if ((b == 0 || b == 3) && ct->band[b].shelf) {
-        ZcKind kind = (b == 3) ? ZC_HISHELF : ZC_LOSHELF;
-        const float *ft = (b == 3) ? ZC_FTAP_HI_SHELF : ZC_FTAP_LO_SHELF;
-        const float *wt = (b == 3) ? ZC_WTAP_HI_SHELF : ZC_WTAP_LO_SHELF;
-        const double *cap = (b == 3) ? ZC_CAP_HI_SHELF : ZC_CAP_LO_SHELF;
-        zc_section_build_bellshelf(&c->sec[s], kind, ft, wt, cap,
-                                   ct->band[b].freq, ct->band[b].gain, fs);
-      } else {
-        zc_section_build_bellshelf(&c->sec[s], ZC_BELL,
-              zc_ftap_band(b), zc_wtap_band(b), zc_cap_band(b),
-              ct->band[b].freq, ct->band[b].gain, fs);
-      }
-    }
-    s++;
-  }
-  if (ct->lp_on) {
-    if (ct->lp_freq != prev->lp_freq || ct->lp_resonant != prev->lp_resonant) {
-      double fc = zc_interp(ct->lp_freq, ZC_LP_NORM, ZC_LP_HZ, ZC_ARRLEN(ZC_LP_NORM));
-      double Q = ct->lp_resonant ? ZC_LP_Q_RESONANT : ZC_LP_Q_CLEAN;
-      zc_section_build_filter(&c->sec[s], ZC_LP, fc, Q, fs);
-    }
-    s++;
-  }
 }
 
 #endif /* ZC_DSP_H */

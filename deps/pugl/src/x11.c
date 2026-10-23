@@ -595,8 +595,33 @@ puglRealize(PuglView* const view)
     return st ? st : PUGL_BACKEND_FAILED;
   }
 
+  // Dynamo 0C patch: an embedded view takes its PARENT's visual and depth. The
+  // backend picks the screen's first visual, and a child of a different depth
+  // than a 32-bit (ARGB) parent is a BadMatch that Xlib's default handler turns
+  // into exit() of the host.
+#ifndef ZC_PUGL_NO_PARENT_VISUAL   // the gate's negative arm builds without this patch
+  if (parent != RootWindow(display, screen)) {
+    XWindowAttributes pa;
+    if (XGetWindowAttributes(display, parent, &pa) && pa.depth != impl->vi->depth) {
+      XVisualInfo tmpl;
+      int         n = 0;
+      tmpl.visualid   = XVisualIDFromVisual(pa.visual);
+      XVisualInfo* pv = XGetVisualInfo(display, VisualIDMask, &tmpl, &n);
+      if (pv && n > 0) {
+        XFree(impl->vi);
+        impl->vi = pv;
+      } else if (pv) {
+        XFree(pv);
+      }
+    }
+  }
+#endif
+
   // Create a colormap based on the visual info from the backend
   attr.colormap = XCreateColormap(display, parent, impl->vi->visual, AllocNone);
+#ifndef ZC_PUGL_NO_PARENT_VISUAL
+  attr.border_pixel = 0;   // Dynamo 0C patch: required when the depth differs from the root's
+#endif
 
   // Set the event mask to request all of the event types we react to
   attr.event_mask |= ButtonPressMask;
@@ -627,7 +652,11 @@ puglRealize(PuglView* const view)
                             impl->vi->depth,
                             InputOutput,
                             impl->vi->visual,
+#ifndef ZC_PUGL_NO_PARENT_VISUAL
+                            CWColormap | CWEventMask | CWBorderPixel,
+#else
                             CWColormap | CWEventMask,
+#endif
                             &attr);
 
   // Create the backend drawing context/surface

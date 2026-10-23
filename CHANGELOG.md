@@ -3,6 +3,69 @@
 All notable changes to **Dynamo 0C EQ** are recorded here, newest first. Versions
 follow [semantic versioning](https://semver.org).
 
+## [1.4.0] — 2026-10-23
+
+A new face and a harder shell. Dynamo 0C now looks like the other plugins of the family: a
+photorealistic one-slot 500-series module. Underneath, a cold audit of the whole plugin found
+ways a host could crash it or make it play the wrong filter, and every one is fixed and
+guarded by a test that fails if the defect comes back. With its knobs set, the equaliser sounds as it did.
+The plugin reports version 10.0 to the host (it was 8.0).
+
+### Changed
+- A new, photorealistic panel: Dynamo 0C is now drawn as a one-slot 500-series module, rendered from a 3D scene
+  (brushed and anodised aluminium, black knobs with white heads, buttons set into the metal that light up from
+  inside). Everything it did before it still does, in the same way: drag a knob (hold Shift for fine control),
+  double-click to reset, click the title to bypass, click DRIVE for the oversampling card, LF and HF choose bell or
+  shelf (their buttons, or the curve symbols above them, which light up to show the selected one). The panel images
+  add 0.7 MB to the bundle.
+
+### Fixed
+- Closing the editor no longer frees the panel's fonts underneath the host's cairo. The last
+  editor to close used to free its FreeType faces while cairo still held them, and cairo files
+  those faces by memory address: a face the host opened later at the same address was handed the
+  stale one. Each face now owns its FreeType library and is freed by FreeType itself when cairo
+  lets go of it, so nothing is freed early and nothing calls back into an unloaded editor.
+  A new gate (`make ui-unload`) opens and closes the editor twice, unloads it, and checks that
+  every face the host opens afterwards comes back fresh; the old code fails it.
+- **A broken control value can no longer crash the host.** A NaN on a band's frequency or gain
+  port (from a misbehaving host, script or automation curve) crashed the host outright, and +Inf
+  on DRIVE left the plugin outputting garbage for good. Every control input is now checked
+  against the range the plugin declares: a NaN reads as the port's default, anything else is
+  clamped.
+- **A very loud input no longer kills the drive.** About +37 dBFS into the drive at full knob
+  with 2x or 4x oversampling (two stock +20 dB gain stages before the plugin are enough) made the
+  channel output NaN until the host re-activated the plugin. It now saturates as it should.
+- **One bad input sample no longer silences the channel.** A single NaN or infinite input sample
+  stayed in the filters' memory and the channel stayed dead until re-activation. Now the plugin
+  outputs one silent block and carries on.
+- **The EQ always lands on the right filter.** After a host primed the plugin with an empty
+  `run(0)` call and then re-activated it, or flipped a switch, the EQ could play a filter built
+  from the previous settings (measured: 10 dB off) until a knob moved again. And a band moved on
+  the block right before a switch flip kept its approximate, interpolated curve for good (up to
+  −36 dB of error) instead of its exact one.
+- **Turning a knob slowly is cheaper.** While a knob was moving, every other block paid for a full
+  exact filter design that the next block threw away; now a moving knob only interpolates, and
+  the exact design lands once, when the knob stops.
+- **An impossible sample rate is refused.** A host asking for a negative, zero or absurd rate got
+  an instance whose drive could amplify instead of saturate (at −48 kHz, +10 dBFS out of a −6 dBFS
+  input). The plugin now declines to load at such a rate, as LV2 allows; every real rate is
+  unaffected.
+- The plugin's shared table of pre-computed filters (0.6 MB) is freed when the last instance is
+  removed, instead of being kept until the host exits.
+- The reported latency at 2x is **14.75 samples** (the plugin always reported that; the port's
+  description and the 1.3.0 notes below said 7.25).
+- The plugin description validates against the LV2 specification (`sord_validate`: 0 errors).
+- **The value shown while you turn a knob is now the real one.** It used to interpolate the
+  numbers printed around the knob, which are the console's legend and not a measurement: at full
+  boost a gain knob read +10.0 dB while the band really gave +11 to +12 dB (and a high shelf with
+  its frequency at the bottom, +23 dB); a frequency knob at its centre could read half the frequency
+  where the band actually peaks (LOW: 130 Hz shown, 267 Hz real). The read-out is now computed from
+  the same circuit model the equaliser is built from: gain within 0.2 dB and frequency within 2 % of
+  what the plugin does. The printed scales are unchanged.
+- The plugin binary is 13 % smaller: it carried a third processor-specific copy of its audio code
+  that no existing processor would ever select. Every processor still gets the same code path it
+  did before.
+
 ## [1.3.0] — 2026-08-20
 
 A quality-and-cost release for the channel drive. The drive now anti-aliases properly on

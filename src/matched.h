@@ -11,7 +11,7 @@
  *      autocorrelation polynomial
  *   -> H(z) = N0(z)*C(z) / D(z) : numerator of degree (nz+ZC_MZ_CORR), denominator of degree nd.
  * The poles come from D(z) ALONE (matched-Z of a stable analogue prototype) => ALWAYS STABLE.
- * Portable: only <math.h> and <complex.h>. Stateless, no allocations.  */
+ * Only <math.h> and <complex.h> (C11: CMPLX). Stateless, no allocations.  */
 #ifndef ZC_MATCHED_H
 #define ZC_MATCHED_H
 #include <math.h>

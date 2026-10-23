@@ -21,8 +21,8 @@ typedef enum {
 extern cairo_font_face_t *zc_face[ZF_COUNT];
 
 /* Loads the TTFs from <dir> and takes a reference. Returns 1 if a reference was acquired
- * (the caller MUST pair it with exactly one zc_fonts_free), 0 only if FreeType could not
- * initialize (no reference taken -> nothing to free). Per-font failures leave that zc_face[]
+ * (the caller MUST pair it with exactly one zc_fonts_free), 0 only if <dir> is NULL (no
+ * reference taken -> nothing to free). Per-font failures leave that zc_face[]
  * entry NULL and the panel falls back to the system font. Reference-counted across instances. */
 int  zc_fonts_load(const char *dir);
 void zc_fonts_free(void);

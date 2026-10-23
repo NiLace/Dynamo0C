@@ -13,15 +13,15 @@
  *   no iteration, no allocation.
  *
  * WHAT IT COSTS at the 33 nodes per axis this compiles (see ZC_GRID_N below for why 33):
- *   - memory     0.58 MB per sample rate, STATIC AND SHARED -- about seven instances' worth, so a
+ *   - memory     0.63 MB per sample rate, STATIC AND SHARED -- about seven instances' worth, so a
  *                per-instance copy would be unaffordable in a session with dozens of them
- *   - fill time  0.72 s, which is why it is not filled in instantiate()
- *   - accuracy   p95 -37.2 dB against the exact design, which is deliberate and is only ever heard
+ *   - fill time  0.71 s on an i7-8700K at 48 kHz, which is why it is not filled in instantiate()
+ *   - accuracy   p95 -37.2 dB, worst -27.8 dB against the exact design, deliberate and only ever heard
  *                DURING a gesture: the section is redesigned exactly as soon as the knob stops
  *   - stability  every interpolated pole stays inside the unit circle
  *
  * At twice the density (65 nodes per axis) the same probe measures median -71.4 dB, p95 -52.0 dB
- * and worst -35.3 dB, for 2.32 MB and 2.87 s. Both sets come from compare/grid_interp.c over 13824
+ * and worst -35.3 dB, for about four times the memory and the fill time. Both sets come from the laboratory's grid_interp.c over 13824
  * points chosen strictly between nodes, never on one.
  *
  * THE ACCURACY FIGURES ARE A PROPERTY OF THE DENSITY, not of interpolation in general. Interpolating
@@ -37,10 +37,10 @@
  * what you listen to permanently, and at that standard 33 is too coarse. Here the interpolated
  * filter only exists WHILE THE KNOB IS MOVING: the moment it stops, the section is redesigned
  * exactly. What matters during a gesture is that it does not step or crunch rather than that it
- * lands within a fraction of a dB, and that is what compare/knob_gate.c measures.
+ * lands within a fraction of a dB, and that is what the laboratory's knob_gate.c measures.
  *
- * The saving is not cosmetic: 2.32 MB -> 0.58 MB and 2.87 s -> 0.72 s of background fill, a
- * quarter of the memory and a quarter of the time that thread exists at all. */
+ * The saving is not cosmetic: (65/33)^2 = 3.9 times fewer nodes, so about a quarter of the memory
+ * (0.63 MB instead of ~2.4 MB) and a quarter of the time the filling thread exists at all. */
 #define ZC_GRID_N 33
 
 /* One designed filter, without its state: that belongs to the instance, never to the table. */
@@ -56,30 +56,31 @@ typedef struct {
   double fs;
 } ZcGrid;
 
-/* --- filling (NOT on the audio thread: 0.72 s) ------------------------------------------------ */
-static inline void zc_grid_fill_one(ZcGridBand *g, int which, double fs) {
-  ZcSection s;
+/* --- filling (NOT on the audio thread: 0.71 s on an i7-8700K) -----------------------------------
+ * Every node starts from a ZEROED section: a builder whose design fails keeps what the section held
+ * (zc_section_keep_or_bypass reads it), so an uninitialised one would hand garbage to the table. A
+ * failed node is counted, and the filler does not publish a table that has one: the plugin keeps
+ * designing exactly instead of interpolating towards a pass-through node.
+ * ZC_GRID_FAIL_NODE=k makes node k of every band report a failure: the negative arm of make abuse. */
+static inline int zc_grid_fill_one(ZcGridBand *g, int which, double fs) {
+  int failed = 0;
   for (int i = 0; i < ZC_GRID_N; i++) {
     double nf = (double)i / (ZC_GRID_N - 1);
     for (int j = 0; j < ZC_GRID_N; j++) {
       double ng = (double)j / (ZC_GRID_N - 1);
-      if (which <= ZC_GB_HI)
-        zc_section_build_bellshelf(&s, ZC_BELL, zc_ftap_band(which), zc_wtap_band(which),
-                                   zc_cap_band(which), nf, ng, fs);
-      else if (which == ZC_GB_LOSHELF)
-        zc_section_build_bellshelf(&s, ZC_LOSHELF, ZC_FTAP_LO_SHELF, ZC_WTAP_LO_SHELF,
-                                   ZC_CAP_LO_SHELF, nf, ng, fs);
-      else
-        zc_section_build_bellshelf(&s, ZC_HISHELF, ZC_FTAP_HI_SHELF, ZC_WTAP_HI_SHELF,
-                                   ZC_CAP_HI_SHELF, nf, ng, fs);
+      ZcSection s;
+      memset(&s, 0, sizeof s);
+      int ok = (which <= ZC_GB_HI) ? zc_section_build_band(&s, which, 0, nf, ng, fs)
+                                   : zc_section_build_band(&s, which == ZC_GB_HISHELF ? 3 : 0, 1, nf, ng, fs);
+#ifdef ZC_GRID_FAIL_NODE
+      if (i * ZC_GRID_N + j == ZC_GRID_FAIL_NODE) ok = 0;
+#endif
+      if (!ok) failed++;
       memcpy(g->n[i][j].b, s.b, sizeof g->n[i][j].b);
       memcpy(g->n[i][j].a, s.a, sizeof g->n[i][j].a);
     }
   }
-}
-static inline void zc_grid_fill(ZcGrid *g, double fs) {
-  g->fs = fs;
-  for (int w = 0; w < ZC_GB_N; w++) zc_grid_fill_one(&g->band[w], w, fs);
+  return failed;
 }
 
 /* --- lookup (audio thread; this is the whole point) -------------------------------------------
