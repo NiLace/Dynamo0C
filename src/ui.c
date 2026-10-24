@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
 /* Copyright (C) The NL Sounds contributors */
-/* ui.c -- Dynamo 0C EQ : LV2 UI (Pugl + Cairo). Single translation unit.
+/* ui.c -- Dynamo 0C EQ : LV2 UI (Pugl + Cairo); the bundled font's loader is ui_fonts.c.
  * Drawing in ui_photo.h (pure module: the photoreal panel and its live parts; the controls' tables come from
  * ui_panel.h, their defaults from port_defaults.h, i.e. the TTL). Here: Pugl window, events, control-port writes. Every
  * coordinate below is in the panel render's pixels (PH_W x PH_H): the window is that image, scaled and centred. */
@@ -45,10 +45,6 @@ typedef struct {
   int    last_knob; double last_press;
   int    needs_redraw;
 
-  int    set_open;         /* the OVERSAMPLING card is open (opened from the DRIVE label) */
-  int    set_hover_seg;    /* segment under the pointer while it is open (-1 = none) */
-  int    set_hover_close;  /* pointer is over the close X */
-
   PhImages img;            /* panel.png + buttons.png + the ink masks, per instance: ~2.2 MB decoded */
 
   double anim[2];          /* animated engaged-ness of POWER / EQ (0..1), 0.2s fades */
@@ -61,6 +57,8 @@ typedef struct {
   int    win_w, win_h;     /* current window size */
   double scale, ox, oy;    /* logical->window transform (uniform scale + centering) */
   int    fonts_loaded;     /* nonzero if this instance holds a font reference (balances the free) */
+  int    settled;          /* the first idle has run: the fades start from the host's state, not the factory one */
+  int    x_dead;           /* an X error in an idle (the window is gone, e.g. the host destroyed the parent): stop */
 } ZcUI;
 
 /* uniform scale + centring of the panel image in the window */
@@ -89,7 +87,7 @@ static void write_port(ZcUI *ui, int port, float val) {
   ui->v[port] = val;
   ui->write(ui->controller, (uint32_t)port, sizeof(float), 0, &val);
 }
-/* One-shot change (a switch, the title, a card segment, a double-click reset): the gesture starts
+/* One-shot change (a switch, the title, a double-click reset): the gesture starts
  * and ends around the single write, which is what the host needs to record it as a user edit. */
 static void write_port_gesture(ZcUI *ui, int port, float val) {
   zc_touch(ui, port, true);
@@ -105,40 +103,19 @@ static void redraw(ZcUI *ui) { ui->needs_redraw = 1; }
 static void on_press(ZcUI *ui, double x, double y) {
   double now = puglGetTime(ui->world);
 
-  /* OVERSAMPLING card open: it is MODAL. The X closes, a segment selects (and closes), and a click
-   * anywhere outside the card closes without changing anything. Nothing under the card can be hit
-   * -- that is the point of the dim. */
-  if (ui->set_open) {
-    double cx, cy; ph_to_card(x, y, &cx, &cy);            /* the card keeps its own units (SET_*) */
-    double dxc = cx - SET_CLOSE_CX, dyc = cy - SET_CLOSE_CY;
-    if (dxc*dxc + dyc*dyc <= SET_CLOSE_R*SET_CLOSE_R) {   /* the X */
-      ui->set_open = 0; redraw(ui); ui->last_knob = -1; return;
-    }
-    for (int i = 0; i < SET_NOPT; i++) {
-      double sx, sy, sw, sh; set_seg_rect(i, &sx, &sy, &sw, &sh);
-      if (cx >= sx && cx <= sx+sw && cy >= sy && cy <= sy+sh) {
-        write_port_gesture(ui, P_DRIVE_OS, (float)i);
-        ui->set_open = 0; redraw(ui); ui->last_knob = -1; return;
-      }
-    }
-    if (!set_in_card(cx, cy)) { ui->set_open = 0; redraw(ui); }   /* click outside -> close */
-    ui->last_knob = -1; return;
-  }
   /* clicking the TITLE toggles engage/bypass -- works even while bypassed (it is the only thing
-   * that does). Replaces the old POWER switch. */
+   * that does). It is the plugin's power port, which the host's bypass also drives (lv2:enabled). */
   { if (ph_in(PH_TITLE, x, y)) {
       write_port_gesture(ui, P_POWER, ui->v[P_POWER] > 0.5f ? 0.0f : 1.0f);
       redraw(ui); ui->last_knob = -1; return; } }
   /* while bypassed, only the title responds */
   if (ui->v[P_POWER] <= 0.5f) { ui->last_knob = -1; return; }
 
-  /* the DRIVE LABEL is a control: it opens the OVERSAMPLING card. Tested BEFORE the knobs: the boxes are disjoint
-   * (checked by make ui-geometry), but the label must win if that ever changes. */
-  { if (ph_in(PH_DRIVE_LABEL, x, y)) {
-      ui->set_open = 1; ui->set_hover_seg = -1; ui->set_hover_close = 0;
-      redraw(ui); ui->last_knob = -1; return; } }
-
   int k = ph_knob_at(x, y);
+#ifndef ZC_UI_EQOUT_KNOBS_TURN   /* the negative arm of make touch's --eqout leg */
+  /* EQ out: the four bands' knobs (the first 8) are dark and do not turn; a press on one does nothing */
+  if (k >= 0 && k < 8 && ui->v[P_EQ_ON] <= 0.5f) { ui->last_knob = -1; return; }
+#endif
   if (k >= 0) {
     if (ui->last_knob == k && (now - ui->last_press) < DCLICK_S) {   /* double-click = reset */
       write_port_gesture(ui, KNOBS[k].port, ZC_TTL_DEFAULT[KNOBS[k].port]);
@@ -167,21 +144,6 @@ static void on_press(ZcUI *ui, double x, double y) {
   }
   ui->last_knob = -1;
 }
-/* hover feedback while the card is open: the X and the segments light under the pointer.
- * Only redraws when the hovered thing actually CHANGES -- a motion event per pixel that repainted
- * the panel would cost a core for nothing (see the family's UI perf notes). */
-static void on_hover_settings(ZcUI *ui, double px, double py) {
-  int seg = -1; double x, y; ph_to_card(px, py, &x, &y);
-  for (int i = 0; i < SET_NOPT; i++) {
-    double sx, sy, sw, sh; set_seg_rect(i, &sx, &sy, &sw, &sh);
-    if (x >= sx && x <= sx+sw && y >= sy && y <= sy+sh) { seg = i; break; }
-  }
-  double dxc = x - SET_CLOSE_CX, dyc = y - SET_CLOSE_CY;
-  int close = (dxc*dxc + dyc*dyc <= SET_CLOSE_R*SET_CLOSE_R);
-  if (seg != ui->set_hover_seg || close != ui->set_hover_close) {
-    ui->set_hover_seg = seg; ui->set_hover_close = close; redraw(ui);
-  }
-}
 /* Incremental drag: accumulate the delta each motion (not absolute from the press point), so that
  * pressing/releasing SHIFT mid-drag switches coarse<->fine with no jump. SHIFT -> ZC_FINE x finer. */
 static void on_motion(ZcUI *ui, double y, unsigned mods) {
@@ -208,7 +170,9 @@ static void ensure_bg(ZcUI *ui, cairo_t *target) {
   if (ui->bg) cairo_surface_destroy(ui->bg);
   ui->bg = cairo_surface_create_similar(cairo_get_target(target), CAIRO_CONTENT_COLOR, ui->win_w, ui->win_h);
   cairo_t *c = cairo_create(ui->bg);
-  cairo_set_source_rgb(c, 0.055, 0.055, 0.059); cairo_paint(c);
+  if (ui->img.panel) cairo_set_source_rgb(c, 0.055, 0.055, 0.059);
+  else cairo_set_source_rgb(c, 0.42, 0.42, 0.43);    /* no images: a plain grey plate the dark pointers read on */
+  cairo_paint(c);
   if (ui->img.panel) {
     cairo_translate(c, ui->ox, ui->oy); cairo_scale(c, ui->scale, ui->scale);
     cairo_set_source_surface(c, ui->img.panel, 0, 0);
@@ -230,7 +194,7 @@ static void on_expose(ZcUI *ui, PuglView *view) {
   cairo_rectangle(cr, 0, 0, PH_W, PH_H); cairo_clip(cr);
   /* the plate is already in the cached layer: draw everything else (ph_draw without its plate) */
   PhImages live = ui->img; live.panel = NULL;   /* the plate is in the cached layer */
-  ph_draw(cr, &live, ui->v, ui->show_knob, ui->anim, ui->set_open, ui->set_hover_seg, ui->set_hover_close);
+  ph_draw(cr, &live, ui->v, ui->show_knob, ui->anim);
   cairo_restore(cr);
 }
 
@@ -246,31 +210,28 @@ static PuglStatus on_event(PuglView *view, const PuglEvent *e) {
     /* the left button only (pugl numbers from 0): another button must neither start a drag nor re-target one */
     case PUGL_BUTTON_PRESS:   if (e->button.button == 0) on_press(ui, (e->button.x - ui->ox)/s, (e->button.y - ui->oy)/s); break;
     case PUGL_BUTTON_RELEASE: if (e->button.button == 0) on_release(ui); break;
-    /* a release can be lost (another client grabs the pointer mid-drag, the window loses focus): end the drag there,
-     * or the gesture stays open and the knob follows the pointer with the button up */
+    /* a release is lost when another client grabs the pointer mid-drag (X delivers the release to the window that was
+     * pressed otherwise): end the drag there, or the gesture stays open and the knob follows the pointer. pugl keeps
+     * focus events to itself, so a focus change cannot be used for this. */
     case PUGL_POINTER_OUT:    if (e->crossing.mode == PUGL_CROSSING_GRAB) on_release(ui); break;
-    case PUGL_FOCUS_OUT:      on_release(ui); break;
-    case PUGL_MOTION:
-      if (ui->set_open)   /* the card is modal: hover feeds it, never a knob drag underneath */
-        on_hover_settings(ui, (e->motion.x - ui->ox)/s, (e->motion.y - ui->oy)/s);
-      else
-        on_motion(ui, (e->motion.y - ui->oy)/s, e->motion.state);
-      break;
+    case PUGL_MOTION:         on_motion(ui, (e->motion.y - ui->oy)/s, e->motion.state); break;
     default: break;
   }
   return PUGL_SUCCESS;
 }
 
 /* ---------- LV2 UI ---------- */
-/* X errors while the editor's window is created or torn down. Xlib's default handler exit()s the whole HOST, so
- * those two moments run under a TEMPORARY handler that records instead, and the previous one is put back (a plugin
- * must never keep a process-wide handler). zc_x_error holds the last error seen inside a guard; UI thread only. */
+/* X errors. Xlib's default handler exit()s the whole HOST, so everything this UI asks of the X server -- creating the
+ * window, every idle (events, repaints), tearing it down -- runs under a TEMPORARY handler that records instead, and
+ * the previous one is put back (a plugin must never keep a process-wide handler). The handler goes in BEFORE the sync,
+ * so an error already in flight is recorded too. zc_x_error holds the last error seen inside a guard; UI thread only. */
 static int zc_x_error;
 static int zc_x_error_record(Display *d, XErrorEvent *e) { (void)d; zc_x_error = e->error_code ? e->error_code : 1; return 0; }
 static XErrorHandler zc_x_guard_begin(Display *d) {
-  if (d) XSync(d, False);
   zc_x_error = 0;
-  return XSetErrorHandler(zc_x_error_record);
+  XErrorHandler prev = XSetErrorHandler(zc_x_error_record);
+  if (d) XSync(d, False);
+  return prev;
 }
 /* tear the window and the world down under the guard: the window may already be gone (a failed creation, or a host
  * that destroyed the parent first), and freeing it then is a BadWindow */
@@ -304,7 +265,6 @@ instantiate(const LV2UI_Descriptor *d, const char *uri, const char *bundle,
     ph_load(&ui->img, photodir);
   }
   ui->drag_knob = -1; ui->show_knob = -1; ui->last_knob = -1;
-  ui->set_open = 0; ui->set_hover_seg = -1; ui->set_hover_close = 0;
   ui->anim[0] = ui->anim[1] = 1.0;   /* start settled, not fading in */
   /* the plugin's factory state (the TTL's defaults) until the host's first port_event */
   for (int i = 0; i < ZC_N_PORTS; i++) ui->v[i] = ZC_TTL_DEFAULT[i];
@@ -389,20 +349,39 @@ static void port_event(LV2UI_Handle h, uint32_t port, uint32_t size,
   float val = *(const float*)buf;
 #ifndef ZC_UI_TRUST_PORTS   /* the gate's negative arm builds without this guard and must be caught */
   /* A host may hand anything (a broken session, an OSC message): a non-finite value is ignored, a continuous control
-   * is clamped to its [0, 1] range, so nothing downstream (the pointer, the read-out's scale index, a drag that writes
-   * the value back) ever sees a value outside what the TTL declares. */
+   * is clamped to the range the TTL declares for its port (port_defaults.h), so nothing downstream (the pointer, the
+   * read-out's scale index, a drag that writes the value back) ever sees a value outside it. */
   if (!isfinite(val)) return;
-  if (port != P_DRIVE_OS && port != P_LATENCY) { if (val < 0.0f) val = 0.0f; if (val > 1.0f) val = 1.0f; }
-  else if (port == P_DRIVE_OS) { if (val < 0.0f) val = 0.0f; if (val > (float)(SET_NOPT - 1)) val = (float)(SET_NOPT - 1); }
+  if (val < ZC_TTL_MIN[port]) val = ZC_TTL_MIN[port];
+  if (val > ZC_TTL_MAX[port] && port != P_LATENCY) val = ZC_TTL_MAX[port];
 #endif
   if (ui->v[port] != val) { ui->v[port] = val; redraw(ui); }
 }
 
+static void ui_idle_body(ZcUI *ui);
 static int ui_idle(LV2UI_Handle h) {
   ZcUI *ui = (ZcUI*)h;
+  if (ui->x_dead) return 0;
+#ifndef ZC_UI_IDLE_UNGUARDED   /* the negative arm of make ui-unload's --parentgone leg */
+  Display *d = (Display*)puglGetNativeWorld(ui->world);
+  XErrorHandler prev = zc_x_guard_begin(d);
+  ui_idle_body(ui);
+  if (d) XSync(d, False);
+  XSetErrorHandler(prev);
+  if (zc_x_error) ui->x_dead = 1;
+#else
+  ui_idle_body(ui);
+#endif
+  return 0;
+}
+static void ui_idle_body(ZcUI *ui) {
   /* animate POWER / EQ engage<->bypass toward their targets (0.2s, framerate-independent) */
   { double now = puglGetTime(ui->world);
     double dt = now - ui->last_t; ui->last_t = now;
+    if (!ui->settled) {   /* the host's first port events (a session's state) arrive after instantiate: start there */
+      ui->settled = 1;
+      ui->anim[0] = ui->v[P_POWER] > 0.5f ? 1.0 : 0.0; ui->anim[1] = ui->v[P_EQ_ON] > 0.5f ? 1.0 : 0.0;
+    }
     if (dt < 0) dt = 0;
     if (dt > 0.1) dt = 0.1;
     const int ports[2] = { P_POWER, P_EQ_ON };
@@ -427,7 +406,6 @@ static int ui_idle(LV2UI_Handle h) {
     if (ui->needs_redraw && (np - ui->last_paint) >= (1.0/30.0)) {
       ui->needs_redraw = 0; ui->last_paint = np; puglObscureView(ui->view); } }
   puglUpdate(ui->world, 0.0);
-  return 0;
 }
 
 /* NOTE ON LV2_UI__resize, which this deliberately does NOT export.

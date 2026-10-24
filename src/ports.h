@@ -41,25 +41,19 @@ typedef enum {
   P_LP_MODE   = 20,  /* toggle: 0=clean (Q=0.707, no peak) 1=resonant (Q=0.99, with boost) */
 
   /* output */
-  P_LATENCY   = 21,  /* output: latency in samples (0 unless drive oversampling is engaged) */
+  P_LATENCY   = 21,  /* output: latency in samples, the same in every mode (the 4x drive's; the other paths are delayed to match) */
 
-  P_HP_BUMP   = 22,  /* HP toggle: 0=clean (Butterworth) 1=resonant (boost ~+1.5 dB at the cutoff) */
+  P_HP_BUMP   = 22,  /* HP toggle: 0=clean (Butterworth) 1=resonant (the console's own: +1.25 dB about half an octave above the corner) */
 
   /* channel drive (console-style input stage). norm 0..1, 0=bypass (auto-on when the knob moves).
    * 0.5 = the shaper's nominal intensity (pre-gain 1); >0.5 pushes harder. Bounded asym. shaper + DC-block. */
   P_DRIVE     = 23,
 
-  /* drive oversampling: suppresses the aliasing of the memoryless shaper. Only engages when the
-   * drive itself is active; adds latency (FIR round-trip) only then. 0=1x 1=2x 2=4x. */
-  P_DRIVE_OS  = 24,  /* enum: 0=1x (bit-identical to the bare drive) 1=2x 2=4x */
+  /* kept only so that sessions saved with earlier versions load: the drive is always 4x oversampled and this port is
+   * not read (lv2.c, ZC_DRIVE_OS) */
+  P_DRIVE_OS  = 24,
 
   ZC_N_PORTS  = 25
 } PortIndex;
-
-/* Factory default for P_DRIVE_OS: 4x, the only setting that meets the aliasing criterion.
- * The TTL declares the same value, and `make lv2check` fails if the two disagree -- a default
- * written in two places that drift is how a screenshot or a preview ends up showing a setting the
- * plugin does not ship with. */
-#define ZC_DRIVE_OS_DEFAULT 2
 
 #endif /* ZC_PORTS_H */

@@ -1,19 +1,15 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
 /* Copyright (C) The NL Sounds contributors */
-/* ui_fonts.h -- loading of bundled fonts (FreeType -> cairo-ft) for the Dynamo 0C EQ panel.
- * The cairo faces are exposed via zc_face[]; if they did not load (NULL), ui_panel.h falls back to
- * Cairo's "toy" API (system font). Roles -> files in ui_fonts.c. */
+/* ui_fonts.h -- loading of the bundled font (FreeType -> cairo-ft) for the Dynamo 0C EQ panel. Every word on the
+ * panel is printed in its image; the one live text, a knob's value while it moves, uses this face. If it did not load
+ * (NULL), ui_panel.h falls back to Cairo's "toy" API (a system font). Roles -> files in ui_fonts.c. */
 #ifndef ZC_UI_FONTS_H
 #define ZC_UI_FONTS_H
 
 #include <cairo/cairo.h>
 
 typedef enum {
-  ZF_BRAND = 0,   /* Oswald SemiBold  -- brand "DYNAMO 0C" */
-  ZF_HEAD,        /* Oswald Medium    -- band headers (HIGH/HI·MID/...) */
-  ZF_LABEL,       /* Barlow Cond SB   -- knob labels, switches, subtitle, footer */
-  ZF_TICK,        /* Barlow Cond Med  -- scale numbers */
-  ZF_VALUE,       /* Inter SemiBold   -- numeric read-out */
+  ZF_VALUE = 0,   /* Inter SemiBold -- a knob's value while it moves */
   ZF_COUNT
 } ZcFontId;
 

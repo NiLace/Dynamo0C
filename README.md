@@ -37,7 +37,7 @@ Smooth, forgiving, and hard to make sound harsh.
 - **The bands and the filters** come from the circuit's analogue transfer function `H(s)`, with the potentiometers'
   real law and the component values of the original design. Each is then matched to the analogue response, so the
   curves keep their shape right up to Nyquist instead of pinching in ("cramping") near the top the way a naïve digital
-  EQ does — at the session's own rate, with **no oversampling and no latency** for the EQ.
+  EQ does — at the session's own rate, with **no oversampling** for the EQ.
 - **The tables behind the knobs** are the potentiometers' wiper positions, derived from the circuit: a frequency knob
   sweeps its band on a logarithmic scale, as on the hardware.
 - **The bands are proportional-Q**: the Q follows the gain, about **0.6** at full boost (0.57–0.64) and about **0.45**
@@ -47,11 +47,11 @@ Smooth, forgiving, and hard to make sound harsh.
   specified by three things you can hear: where it saturates on the positive side, where on the negative side (higher,
   which is what brings in the even harmonics), and its small-signal gain.
 
-<p align="center"><img src="assets/images/eq_response.png" alt="Dynamo 0C frequency response — plugin vs analogue model (clean), with BUMP shown as a voiced knee" width="720"></p>
+<p align="center"><img src="assets/images/eq_response.png" alt="Dynamo 0C frequency response — the plugin against the analogue model it is built from, with and without BUMP" width="720"></p>
 
 The curve above is a full EQ pass with the high-pass and low-pass filters engaged. The plugin (solid) sits right on top
-of the analogue model it is built from (white dashed): they agree to well under 0.3 dB across the whole spectrum. The
-orange curve is the **BUMP** voicing, described below.
+of the analogue model it is built from (dashed): they agree to within 0.2 dB across the whole spectrum. The orange
+curve has **BUMP** on: the console's own resonant filter corners, described below.
 
 ## The front panel
 
@@ -67,33 +67,27 @@ Eleven knobs and four buttons, laid out like a 500-series module:
 - **LF / HF** — bell or shelf for the Low and High bands: **pressed is shelf, released is bell**. The two symbols above
   each button show which one is selected, lit in amber, and you can click the symbol you want.
 - **EQ** — engages the four bands (the filters work either way).
-- **BUMP** — the resonant knee on both filters (see *Our mods*).
+- **BUMP** — the console's resonant knee on both filters; off gives clean corners (see *Our mods*).
 - **The title**, «DYNAMO 0C», is the **bypass**: amber while the plugin runs; click it and the whole panel goes dark,
-  the title turns pale.
+  the title turns pale. It is the same control as your DAW's bypass button for the plugin: either one sets the other.
 
 A band's name lights in **amber once its gain is moved off 0 dB** and stays white while it sits at 0 dB or EQ is out;
-DRIVE's name is amber while the drive is on. (A band at 0 dB is still in the signal path, as on the console: its
+DRIVE's name is amber while the drive is on. With **EQ out**, the four bands' knob caps go dark and those knobs do
+not turn until EQ is back in. (A band at 0 dB is still in the signal path, as on the console: its
 analogue curve is not perfectly flat even at the centre detent, so it is never switched out.) Drag a knob up or down to set it, hold **Shift** for fine adjustment, and
 **double-click** to snap it back to its default; its value shows while you move it, computed from the circuit model
 (the numbers printed around each knob are the console's legend, not a measurement). The window is resizable and the
 panel scales uniformly.
 
-### The oversampling card
+### The drive
 
-<p align="center"><img src="assets/images/Oversampling.png" alt="Dynamo 0C — the oversampling card, opened from DRIVE" width="260"></p>
+DRIVE always runs **4x oversampled**, with a half-band filter and antiderivative anti-aliasing: that keeps its
+harmonics from folding back below our target over the whole musical range, up to a sustained 17 kHz at full drive.
+There is nothing to set. None of its cost is paid while the knob is at zero.
 
-**Click DRIVE** (the word, beside its knob) to open a small card with the drive's **oversampling**, which decides how
-its harmonics are kept from folding back:
-
-- **1x** — the drive at the session rate, no added latency; the cheapest and the least clean on bright material at
-  high drive.
-- **2x** — an economy setting: cheaper than 4x, **14.75 samples** of latency; at high drive on a sustained tone near
-  17 kHz its aliasing rises above our target.
-- **4x** — **the default**: a half-band filter plus antiderivative anti-aliasing, **16.93 samples** of latency; it
-  keeps the aliasing below our target over the whole musical range, up to a sustained 17 kHz at full drive.
-
-The factor shows under DRIVE while it is above 1x. None of it is paid while the drive is at zero: no cost and no
-latency. The latency is reported to the host, which compensates for it.
+**Latency.** Dynamo 0C always reports the same latency, **17 samples** (0.35 ms at 48 kHz), whatever the drive is
+doing, and the host compensates for it. Switching the drive on or off therefore never moves the track in time, and
+the switch crossfades between two signals that are lined up.
 
 ### Our mods
 
@@ -103,8 +97,7 @@ each one says which position sounds like the stock unit:
 | Control | What it does | Stock console |
 |---|---|---|
 | **DRIVE** | An asymmetric, console-style input saturation: a mix of even and odd harmonics that reads as thickness and warmth rather than distortion. At its nominal setting it is a subtle sheen. | **0** (off) |
-| **BUMP** | A gentle resonant lift at the corner of both filters at once: about +1.2 dB just above the high-pass corner and just below the low-pass one. | **off** (clean Butterworth corners) |
-| **Drive oversampling** · 1x / 2x / 4x | How the drive is anti-aliased (the card above). | — (the drive is ours) |
+| **BUMP** | The console's filters are resonant: about +1.2 dB just above the high-pass corner and just below the low-pass one. BUMP on is that; BUMP **off** is ours, clean Butterworth corners, and it is the default. | **on** (the console's resonant corners) |
 
 ## What it doesn't model
 
@@ -146,7 +139,7 @@ make install      # installs it to ~/.lv2 (atomically: safe while a host has it 
 ## Third-party components
 
 - **pugl** (`deps/pugl/`) — a minimal portable API for embeddable GUIs, ISC License (see `deps/pugl/COPYING`).
-- **Fonts** (`gui/fonts/`) — Oswald, Barlow Condensed and Inter, under the SIL Open Font License 1.1 (full text and
+- **Fonts** (`gui/fonts/`) — Oswald and Inter, under the SIL Open Font License 1.1 (full text and
   copyright notices in `gui/fonts/OFL.txt`). They stay under the OFL and are not relicensed under the AGPL.
 - **Interface images** (`gui/photo/`) — renders of our own 3D scene of the module, lit with the `studio_small_08` HDRI
   from [Poly Haven](https://polyhaven.com/a/studio_small_08) (CC0), its aluminium textured with the `Metal009` scan

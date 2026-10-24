@@ -24,9 +24,9 @@ static const float ZC_TTL_DEFAULT[25] = {
   1.0f,   /* 17 hp_on */
   1.0f,   /* 18 lp_freq */
   1.0f,   /* 19 lp_on */
-  1.0f,   /* 20 lp_mode */
+  0.0f,   /* 20 lp_mode */
   0.0f,   /* 21 - */
-  1.0f,   /* 22 hp_bump */
+  0.0f,   /* 22 hp_bump */
   0.0f,   /* 23 drive */
   2.0f,   /* 24 drive_os */
 };

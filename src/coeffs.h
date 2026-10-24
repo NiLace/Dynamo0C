@@ -1,8 +1,11 @@
-/* coeffs.h -- model coefficient tables, automatically generated. DO NOT EDIT BY HAND.
- *
- * Contains, for each band and filter, the coefficients of the analog prototype H(s) and the
- * interpolation tables (norm 0..1 -> frequency / width) that dsp.h uses to build the
- * IIR sections in real time. Regenerated from the model; any manual edit will be lost. */
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Copyright (C) The NL Sounds contributors */
+/* coeffs.h -- the circuit model's data: for each band, the closed-form coefficients of its analogue prototype H(s)
+ * in terms of the circuit's resistances and capacitors, the capacitor values, and the knob tables (norm 0..1 ->
+ * potentiometer wiper fraction for frequency and gain; norm -> Hz for HP and LP).
+ * Machine-generated from the circuit model; the generator was not kept, and the tables were later
+ * re-derived from the circuit and checked against these values. Treat the file as DATA: change it only with a tool
+ * that first reproduces it exactly. The hand-set voicing constants (the HP and LP Qs) live in analog.h. */
 #ifndef ZC_COEFFS_H
 #define ZC_COEFFS_H
 
@@ -34,10 +37,6 @@ static const float ZC_HP_NORM[11] = { 0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8,
 static const float ZC_HP_HZ[11] = { 31.6290296, 36.24881461, 57.02420878, 95.52840218, 160.2532679, 269.3446374, 454.1432655, 769.9488803, 1318.225945, 2299.428068, 4170.762634 };
 static const float ZC_LP_NORM[11] = { 0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1 };
 static const float ZC_LP_HZ[11] = { 133.0321941, 152.4540968, 240.0309382, 402.7151911, 676.3517211, 1138.133996, 1921.701192, 3264.575991, 5607.255225, 9826.44109, 17711.63466 };
-#define ZC_HP_N 11
-#define ZC_HP_Q 1
-#define ZC_LP_Q_CLEAN 0.707
-#define ZC_LP_Q_RESONANT 0.99
 
 /* zc_bell_coeffs: num order 2, den order 3 */
 static inline void zc_bell_coeffs(double Rt,double Rb,double Rf,double Cf,double Ct,double b[3],double a[4]) {

@@ -34,10 +34,6 @@ static int s_refs = 0;   /* number of live UIs: our references are dropped when 
 
 /* file per role (order = ZcFontId). */
 static const char *const FILES[ZF_COUNT] = {
-  "Oswald-SemiBold.ttf",          /* ZF_BRAND */
-  "Oswald-Medium.ttf",            /* ZF_HEAD  */
-  "BarlowCondensed-SemiBold.ttf", /* ZF_LABEL */
-  "BarlowCondensed-Medium.ttf",   /* ZF_TICK  */
   "Inter-SemiBold.ttf",           /* ZF_VALUE */
 };
 

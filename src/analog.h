@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
 /* Copyright (C) The NL Sounds contributors */
 /* analog.h -- the analogue prototypes H(s) of the EQ's sections, the tables behind the knobs and the pot laws.
- * Pure and header-only (C11, <math.h> and <complex.h>): the DSP designs its digital sections from these (dsp.h), and
+ * Pure and header-only (C11, <math.h> and <complex.h>): the DSP designs its digital sections from these (section.h), and
  * the UI computes the read-out of a knob from the same equations (zc_band_readout below), so the number on screen is
  * the response the plugin actually builds, not an interpolation of the printed scale. */
 #ifndef ZC_ANALOG_H
@@ -19,8 +19,7 @@
  * its scope is just this include: warnings stay switched on for the hand-written code, which is
  * what lets these sources build with -Wextra -Werror.
  *
- * Note that the laboratory's provenance.c and the laboratory's eqdata.c include coeffs.h directly and are NOT
- * covered by this; they need the same wrapper if they are ever built with -Wextra. */
+ * Anything that includes coeffs.h directly instead of this header needs the same wrapper to build with -Wextra. */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #include "coeffs.h"
@@ -29,11 +28,19 @@
 /* number of elements in a static array (so table lengths aren't hard-coded by hand) */
 #define ZC_ARRLEN(a) ((int)(sizeof(a) / sizeof((a)[0])))
 
-/* high-pass Q per the BUMP button: 0.707 = flat Butterworth (no peak); ZC_HP_Q (~1.0) is a
- * deliberate VOICING choice — a gentle resonant lift (~+1.5 dB) just above the corner. It is
- * hand-set and NOT taken from the schematic: the netlist has no such resonance. Same for
- * ZC_LP_Q_RESONANT on the low-pass. (The README says the same thing to users, under BUMP.) */
+/* The filters' Qs. With BUMP they are the CIRCUIT's: the console's high-pass is a Sallen-Key with equal R and C and a
+ * gain of 2 (Q = 1/(3 - 2) = 1), its low-pass a unity-gain Sallen-Key with C = 0.047 and 0.012 uF (Q = sqrt(C1/C2)/2
+ * = 0.9895, ZC_LP_Q_RESONANT to two figures): about +1.25 dB half an octave above the HP corner and +1.19 dB just
+ * below the LP corner. Without BUMP both corners are Butterworth (the HP's ZC_HP_Q_FLAT exactly, the LP's
+ * ZC_LP_Q_CLEAN to three figures, as it always shipped): that mode is ours, the hardware does not have it. */
+/* The HP and LP switch out at the ends of their travel (HP fully anticlockwise, LP fully clockwise): one definition for
+ * the DSP (lv2.c read_controls) and the read-out (ui_panel.h), so the two cannot disagree on a value. */
+#define ZC_HP_OFF_NORM 0.0005f
+#define ZC_LP_OFF_NORM 0.9995f
 #define ZC_HP_Q_FLAT 0.70710678118654752
+#define ZC_HP_Q 1
+#define ZC_LP_Q_CLEAN 0.707
+#define ZC_LP_Q_RESONANT 0.99
 
 /* ----------------------------------------------------------------- interpolation */
 

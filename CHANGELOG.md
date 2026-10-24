@@ -3,6 +3,62 @@
 All notable changes to **Dynamo 0C EQ** are recorded here, newest first. Versions
 follow [semantic versioning](https://semver.org).
 
+## [1.5.0] — 2026-10-24
+
+### Changed
+- **The drive is always 4x oversampled.** The 1x and 2x settings and the card that chose them
+  are gone: 4x is the only one that keeps the drive's aliasing masked on bright material, and its
+  cost is small. Sessions saved at 1x or 2x now play at 4x.
+- **One latency for every mode.** The plugin now always reports 17 samples (0.35 ms at 48 kHz),
+  the drive's rounded to a whole sample, and delays the paths without it to match. Switching the
+  drive on or off used to change the latency, and the crossfade between the two settings mixed two
+  copies of the signal 15 to 17 samples apart: a comb that hollowed the sound for a few
+  milliseconds. Now the two are aligned, and the host never has to move the track. The cost is
+  that small, constant latency even with the drive off.
+- **The drive starts warm.** Switching the drive on or leaving bypass used to start it from
+  silence, and for a few milliseconds it did not sound like a drive that had been running. It now
+  catches up on the recent input, at any sample rate, before it is heard, so the fade lands on the
+  sound it would have had all along.
+- **BUMP starts off.** A new instance now has clean Butterworth corners on both filters; BUMP
+  (the resonant knee) is one click away. It used to start on. Sessions saved with BUMP on keep it on.
+- **BUMP is the console, not an addition.** Reading the original console's schematic, the
+  high-pass is a Sallen-Key with gain 2 (Q 1.0) and the low-pass a unity-gain one with a 0.047 /
+  0.012 µF pair (Q 0.99): exactly BUMP. What 1.4.0 and earlier called "our own voicing" is the
+  stock filter shape, and BUMP off (clean corners) is the option the hardware does not have. The
+  sound is unchanged; the descriptions are corrected.
+- **The DAW's bypass is the plugin's bypass.** The power port is now designated as the plugin's
+  enable control, so a host's bypass button and the panel's title are one control: bypassing from
+  the DAW darkens the panel, clicking the title moves the DAW's button, and the switch still
+  crossfades with no click.
+
+### Fixed
+- **Closing the editor could take the DAW down** if the DAW had already destroyed the editor's
+  window and asked it to repaint once more: the X error went to a handler that ends the program.
+  Every call the editor makes to the window system is now guarded.
+- **No more filter-design bursts on the audio thread.** The first block after the plugin starts,
+  and switching the EQ in, used to design several filters at once, enough for a dropout with
+  small buffers at high sample rates. The first design now happens before audio
+  starts, and the EQ switch uses the precomputed designs and refines them over the next blocks.
+- **The drive cost much more on silence than on music**; it now costs about the same, and on music
+  nothing changed.
+- **A plugin removed and re-inserted quickly** no longer leaves the new instance without its fast
+  path for knob moves.
+- **Sample rates above 768 kHz are refused**: the low-pass could not be designed at its lowest
+  setting above about 1.16 MHz.
+- **Packaging:** building with your own `CFLAGS` keeps the processor flags the plugin needs.
+
+### Interface
+- **The knob scales are the plugin's own figures.** The numbers printed round every knob were a
+  decorative legend, up to 2.7 times off where the bands really act (HI-MID's centre read 1.5 kHz
+  and acts at 2.4 kHz). Each one is now what the plugin does at that position, to two figures:
+  the four bands' frequencies, HP and LP, and the bands' gains, which on a bell run from about
+  -9 to +12 dB rather than the ±10 printed before.
+- **A visible patina on the aluminium**, matte stains like an old faceplate.
+- **DRIVE's name sits under its knob**, like HP's and LP's; it is no longer a button.
+- **EQ out darkens the four bands' knob caps** and those knobs do not turn until EQ is back in
+  (the panel used to shade the area round them and let them move).
+- **A smaller window by default** (about 220 x 750 pixels); it still resizes freely.
+
 ## [1.4.0] — 2026-10-23
 
 A new face and a harder shell. Dynamo 0C now looks like the other plugins of the family: a

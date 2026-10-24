@@ -26,10 +26,14 @@ $(error the development files of lv2, cairo, x11 or freetype2 were not found by 
 endif
 
 # NO -ffast-math: it folds isfinite() to a constant, so the numerical guards could not see a failure.
-# CFLAGS from the environment replace the optimisation flags (a packager's own); what a plugin needs is added anyway.
-OPTIMIZATIONS := -msse -msse2 -msse3 -mfpmath=sse -fno-math-errno -fno-trapping-math -fomit-frame-pointer -O3 -DNDEBUG
+# CFLAGS from the environment replace the optimisation level (a packager's own); what the plugin NEEDS is added
+# anyway: SSE maths, and -msse3, without which denormal_off() loses its DAZ half (it is compiled under __SSE3__).
+OPTIMIZATIONS := -fomit-frame-pointer -O3 -DNDEBUG
 CFLAGS ?= $(OPTIMIZATIONS) -Wall
-override CFLAGS += -fPIC -fvisibility=hidden -pthread `$(PKG_CONFIG) --cflags lv2`
+ifneq (,$(filter x86_64 i686 i386,$(shell uname -m)))
+override CFLAGS += -msse -msse2 -msse3 -mfpmath=sse
+endif
+override CFLAGS += -fno-math-errno -fno-trapping-math -fPIC -fvisibility=hidden -pthread `$(PKG_CONFIG) --cflags lv2`
 PUGL_SRC   := deps/pugl/src/common.c deps/pugl/src/internal.c deps/pugl/src/x11.c deps/pugl/src/x11_cairo.c
 PUGLCFLAGS := -Ideps/pugl/include `$(PKG_CONFIG) --cflags cairo x11 freetype2`
 PUGLLIBS   := `$(PKG_CONFIG) --libs cairo x11 freetype2` -lXcursor -lXrandr

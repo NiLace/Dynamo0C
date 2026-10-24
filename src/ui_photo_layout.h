@@ -19,7 +19,7 @@ static const struct { double cx, cy, cap_r, body_r; } PH_KNOB[] = {
   { 131.03, 823.49, 33.60, 42.00 },   /* 6 port 13 */
   { 296.97, 895.81, 33.60, 42.00 },   /* 7 port 14 */
   { 131.03, 1018.12, 33.60, 42.00 },   /* 8 port 16 */
-  { 288.97, 1090.44, 33.60, 42.00 },   /* 9 port 18 */
+  { 308.96, 1090.44, 33.60, 42.00 },   /* 9 port 18 */
   { 296.97, 117.30, 33.60, 42.00 },   /* 10 port 23 */
 };
 /* buttons, in SWITCHES[] order: the click box, and where its crop sits in the panel */
@@ -49,10 +49,9 @@ static const struct { int port, kind; double x0, y0, x1, y1; } PH_LABEL[] = {
   { 10, 0, 73.58, 523.55, 188.42, 552.55 },
   { 12, 0, 73.58, 718.25, 188.42, 747.25 },
   { 14, 0, 102.29, 912.95, 159.71, 941.95 },
-  { 23, 1, 161.00, 124.00, 225.00, 146.00 },
+  { 23, 1, 265.00, 210.00, 329.00, 232.00 },
 };
 static const double PH_TITLE[4] = { 32.00, 50.00, 214.00, 88.00 };   /* click = bypass */
-static const double PH_DRIVE_LABEL[4] = { 161.00, 124.00, 225.00, 146.00 };   /* click = OS card */
 /* the panel's metal, inside the backdrop margin (for the bypass dim) */
 static const double PH_METAL[4] = { 15.00, 15.00, 391.00, 1343.50 };
 

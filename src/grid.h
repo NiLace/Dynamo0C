@@ -21,7 +21,7 @@
  *   - stability  every interpolated pole stays inside the unit circle
  *
  * At twice the density (65 nodes per axis) the same probe measures median -71.4 dB, p95 -52.0 dB
- * and worst -35.3 dB, for about four times the memory and the fill time. Both sets come from the laboratory's grid_interp.c over 13824
+ * and worst -35.3 dB, for about four times the memory and the fill time. Both sets come from a development probe (grid_interp.c) over 13824
  * points chosen strictly between nodes, never on one.
  *
  * THE ACCURACY FIGURES ARE A PROPERTY OF THE DENSITY, not of interpolation in general. Interpolating
@@ -32,12 +32,14 @@
 #define ZC_GRID_H
 #include <string.h>
 
+#include "section.h"
+
 /* 33 nodes per axis, not the 65 the probe recommended, and the reason is architectural.
  * The probe judged the grid as a REPLACEMENT for the designer, where the interpolation error is
  * what you listen to permanently, and at that standard 33 is too coarse. Here the interpolated
  * filter only exists WHILE THE KNOB IS MOVING: the moment it stops, the section is redesigned
  * exactly. What matters during a gesture is that it does not step or crunch rather than that it
- * lands within a fraction of a dB, and that is what the laboratory's knob_gate.c measures.
+ * lands within a fraction of a dB, and that is what a development test (knob_gate.c) measures.
  *
  * The saving is not cosmetic: (65/33)^2 = 3.9 times fewer nodes, so about a quarter of the memory
  * (0.63 MB instead of ~2.4 MB) and a quarter of the time the filling thread exists at all. */
@@ -61,7 +63,7 @@ typedef struct {
  * (zc_section_keep_or_bypass reads it), so an uninitialised one would hand garbage to the table. A
  * failed node is counted, and the filler does not publish a table that has one: the plugin keeps
  * designing exactly instead of interpolating towards a pass-through node.
- * ZC_GRID_FAIL_NODE=k makes node k of every band report a failure: the negative arm of make abuse. */
+ * ZC_GRID_FAIL_NODE=k makes node k of every band report a failure: the negative arm of make gridfill. */
 static inline int zc_grid_fill_one(ZcGridBand *g, int which, double fs) {
   int failed = 0;
   for (int i = 0; i < ZC_GRID_N; i++) {

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
 /* Copyright (C) The NL Sounds contributors */
 /* matched.h -- analog-matched designer (matched-Z + HF-weighted FIR correction) for Dynamo.
- * Replaces the EQ's bilinear+oversampling pair with a closed form that needs NO oversampling:
+ * A closed form that needs NO oversampling:
  *   1. roots of the analogue H(s)=B(s)/A(s)  (Durand-Kerner)
  *   2. matched-Z: digital pole/zero = exp(s/fs)  -> denominator D(z) of degree nd, numerator
  *      N0(z) of degree nz
@@ -40,7 +40,7 @@
 #define ZC_MZ_MAXNUM ((2 * ZC_MZ_CORR + 2) > (ZC_MZ_ANALOG_MAX + 2) \
                       ? (2 * ZC_MZ_CORR + 2) : (ZC_MZ_ANALOG_MAX + 2))
 /* Degree of the digital numerator this designer can emit: nz (<=2) plus the correction order.
- * dsp.h sizes ZcSection.b[]/z[] from this, and asserts the two stay in step. */
+ * section.h sizes ZcSection.b[]/z[] from this, and asserts the two stay in step. */
 #define ZC_MZ_MAX_NB (2 + ZC_MZ_CORR)
 
 /* Roots of a real polynomial (coeffs high->low, degree n) by Durand-Kerner.

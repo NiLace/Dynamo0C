@@ -1,7 +1,9 @@
 @prefix doap: <http://usefulinc.com/ns/doap#> .
 @prefix foaf: <http://xmlns.com/foaf/0.1/> .
 @prefix lv2:  <http://lv2plug.in/ns/lv2core#> .
+@prefix opts: <http://lv2plug.in/ns/ext/options#> .
 @prefix pg:   <http://lv2plug.in/ns/ext/port-groups#> .
+@prefix pprops: <http://lv2plug.in/ns/ext/port-props#> .
 @prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix ui:   <http://lv2plug.in/ns/extensions/ui#> .
@@ -24,7 +26,7 @@
 		foaf:homepage <https://github.com/NiLace> ;
 		foaf:mbox <mailto:nilace@nylarea.com>
 	] ;
-	lv2:minorVersion 10 ; lv2:microVersion 0 ;
+	lv2:minorVersion 11 ; lv2:microVersion 0 ;
 	@ZC_UI@
 	lv2:optionalFeature lv2:hardRTCapable ;
 
@@ -48,7 +50,9 @@
 		a lv2:InputPort , lv2:ControlPort ; lv2:index 4 ;
 		lv2:symbol "power" ; lv2:name "Power" ;
 		lv2:default 1 ; lv2:minimum 0 ; lv2:maximum 1 ;
-		lv2:portProperty lv2:toggled , lv2:integer
+		lv2:portProperty lv2:toggled , lv2:integer ;
+		lv2:designation lv2:enabled ;
+		rdfs:comment "The plugin's bypass, and the host's: designated lv2:enabled, so a host's bypass button sets this port (the plugin keeps running and crossfades to the dry signal, delayed by the reported latency) and the panel's title shows and sets the same state."
 	] , [
 		a lv2:InputPort , lv2:ControlPort ; lv2:index 5 ;
 		lv2:symbol "eq_on" ; lv2:name "EQ Engage" ;
@@ -129,9 +133,10 @@
 	] , [
 		a lv2:InputPort , lv2:ControlPort ; lv2:index 20 ;
 		lv2:symbol "lp_mode" ; lv2:name "LP Mode" ;
-		lv2:default 1 ; lv2:minimum 0 ; lv2:maximum 1 ;
+		lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 1 ;
 		lv2:portProperty lv2:toggled , lv2:integer ;
-		lv2:scalePoint [ rdfs:label "Clean" ; rdf:value 0 ] , [ rdfs:label "Resonant" ; rdf:value 1 ]
+		lv2:scalePoint [ rdfs:label "Clean" ; rdf:value 0 ] , [ rdfs:label "Resonant" ; rdf:value 1 ] ;
+		rdfs:comment "Low-pass shape. Resonant (1) is the console's own circuit, a unity-gain Sallen-Key with Q 0.99 (about +1.2 dB just below the corner); Clean (0, the default) is a Butterworth corner the hardware does not have. The panel's BUMP button sets this and hp_bump together."
 	] , [
 		a lv2:OutputPort , lv2:ControlPort ; lv2:index 21 ;
 		lv2:symbol "latency" ; lv2:name "Latency" ;
@@ -139,13 +144,14 @@
 		lv2:designation lv2:latency ;
 		units:unit units:frame ;
 		lv2:portProperty lv2:reportsLatency , lv2:connectionOptional ;
-		rdfs:comment "Samples of latency the drive oversampling adds, and only while the drive is engaged (0 otherwise). The value is FRACTIONAL -- 14.75 at 2x and 16.93 at 4x -- because the FIR round trip is itself fractional (14.5 samples at 2x, 16.81 at 4x) and the ADAA shaper adds half a sample at the oversampled rate. That is why this port is not declared lv2:integer: a host that needs an integer can round it, but the plugin does not claim the value is one." 
+		rdfs:comment "The plugin's latency in samples: ONE value in every mode, 17, so switching the drive never moves the track and the crossfade between modes mixes aligned signals. The paths without the drive are delayed by exactly 17 samples; the drive's own path (its 4x anti-aliasing filters and antiderivative shaper) takes 16.93, 0.07 of a sample less. A whole number, so a host that truncates the value compensates it exactly."
 	] , [
 		a lv2:InputPort , lv2:ControlPort ; lv2:index 22 ;
 		lv2:symbol "hp_bump" ; lv2:name "HP Bump" ;
-		lv2:default 1 ; lv2:minimum 0 ; lv2:maximum 1 ;
+		lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 1 ;
 		lv2:portProperty lv2:toggled , lv2:integer ;
-		lv2:scalePoint [ rdfs:label "Flat" ; rdf:value 0 ] , [ rdfs:label "Bump" ; rdf:value 1 ]
+		lv2:scalePoint [ rdfs:label "Flat" ; rdf:value 0 ] , [ rdfs:label "Bump" ; rdf:value 1 ] ;
+		rdfs:comment "High-pass shape. Bump (1) is the console's own circuit, a Sallen-Key with gain 2 and Q 1.0 (about +1.25 dB half an octave above the corner); Flat (0, the default) is a Butterworth corner the hardware does not have. The panel's BUMP button sets this and lp_mode together."
 	] , [
 		a lv2:InputPort , lv2:ControlPort ; lv2:index 23 ;
 		lv2:symbol "drive" ; lv2:name "Drive" ;
@@ -155,9 +161,9 @@
 		a lv2:InputPort , lv2:ControlPort ; lv2:index 24 ;
 		lv2:symbol "drive_os" ; lv2:name "Drive Oversampling" ;
 		lv2:default 2 ; lv2:minimum 0 ; lv2:maximum 2 ;
-		lv2:portProperty lv2:integer , lv2:enumeration ;
+		lv2:portProperty lv2:integer , lv2:enumeration , pprops:notOnGUI ;
 		lv2:scalePoint [ rdfs:label "1x" ; rdf:value 0 ] ,
 		               [ rdfs:label "2x" ; rdf:value 1 ] ,
 		               [ rdfs:label "4x" ; rdf:value 2 ] ;
-		rdfs:comment "Anti-aliases the (non-linear) drive shaper, and only while the drive is engaged. 1x is bit-identical to the bare drive and adds no latency, but it aliases audibly on bright material at high drive (ANMR +13.29 dB). 2x is an ECONOMY setting: 14.75 samples of latency, about a third of the CPU, and it does NOT meet the criterion on hard material (-2.97 dB) nor on a sustained tone near 17 kHz at full drive. 4x is the DEFAULT and the only setting that meets the criterion of ANMR below -10 dB on the worst frame: a 31-tap half-band filter with a short half-band inside the cascade, plus antiderivative anti-aliasing, scoring -17.84 dB for 16.93 samples of latency. None of this is paid until the drive knob is moved off zero."
+		rdfs:comment "Kept only so that sessions saved with earlier versions load. The drive is always 4x oversampled, the one factor that keeps its aliasing masked on bright material; this value is ignored."
 	] .
